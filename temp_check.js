@@ -426,7 +426,7 @@ function switchPage(page) {
   var titles = { dashboard: 'Risk Dashboard', verify: 'Purchase Verification', data: 'Data Management' };
   document.getElementById('pageTitle').textContent = titles[page] || '';
   if (page === 'dashboard') renderDashboard();
-  if (page === 'verify') renderVerify();
+  if (page === 'verify') { renderVerify(); renderPurchasePlansInVerify(); }
   if (page === 'data') renderDataPage();
 }
 
@@ -709,7 +709,12 @@ function getWeeklyMeetingData() {
     var scrapValue = p.scrapInfo.totalValue;
     var scrapQty = p.scrapInfo.totalQty;
 
-    if (scrapValue > 0 && (stockoutWeek === null || stockoutWeek > 8)) {
+    var plan = planMap[name] || null;
+
+    if (plan && plan.status === 'delayed') {
+      group = 'delayed';
+      groupOrder = 2.5;
+    } else if (scrapValue > 0 && (stockoutWeek === null || stockoutWeek > 8)) {
       group = 'suspend';
       groupOrder = 1;
     } else if (scrapValue > 0 && stockoutWeek !== null && stockoutWeek <= 8) {
@@ -747,13 +752,14 @@ function getWeeklyMeetingData() {
       fifoCalc: fifoCalc,
       impactWeeks: stockoutWeek !== null ? Math.max(0, 12 - stockoutWeek) : 0,
       recoverableValue: scrapValue,
-      plan: planMap[name] || null
+      plan: plan
     };
   }).filter(function(x) { return x !== null; });
 
   var groups = {
     suspend: { title: 'Suspend Purchase', desc: 'Scrap risk, digest stock first', items: [] },
     reduce: { title: 'Reduce Qty', desc: 'Need restock but reduce quantity', items: [] },
+    delayed: { title: 'Delayed Purchase', desc: 'Meeting decided: delay purchase', items: [] },
     plan: { title: 'Plan Purchase', desc: 'Stock OK, schedule purchase', items: [] },
     restock: { title: 'Restock ASAP', desc: 'Stock low, need soon', items: [] },
     prioritize: { title: 'Prioritize Usage', desc: 'Near-expiry batches, speed up', items: [] },
@@ -764,6 +770,12 @@ function getWeeklyMeetingData() {
     if (groups[item.group]) {
       groups[item.group].items.push(item);
     }
+  });
+
+  var sortedGroupKeys = Object.keys(groups).sort(function(a, b) {
+    var ao = groups[a].items.length > 0 ? (groups[a].items[0].groupOrder || 99) : 99;
+    var bo = groups[b].items.length > 0 ? (groups[b].items[0].groupOrder || 99) : 99;
+    return ao - bo;
   });
 
   Object.keys(groups).forEach(function(key) {
@@ -778,6 +790,7 @@ function getWeeklyMeetingData() {
     g.stockoutIn8w = g.items.filter(function(it) { return it.stockoutWeek !== null && it.stockoutWeek < 8; }).length;
     g.pendingPlans = g.items.filter(function(it) { return it.plan && it.plan.status === 'pending'; }).length;
     g.approvedPlans = g.items.filter(function(it) { return it.plan && it.plan.status === 'approved'; }).length;
+    g.delayedPlans = g.items.filter(function(it) { return it.plan && it.plan.status === 'delayed'; }).length;
 
     g.items.sort(function(a, b) {
       if (weeklySortBy === 'stockout') {
@@ -795,18 +808,21 @@ function getWeeklyMeetingData() {
     });
   });
 
-  return groups;
+  return { groups: groups, sortedKeys: sortedGroupKeys };
 }
 
 function renderWeeklyMeeting() {
   var container = document.getElementById('weeklyMeetingContainer');
-  var groups = getWeeklyMeetingData();
+  var result = getWeeklyMeetingData();
+  var groups = result.groups;
+  var sortedKeys = result.sortedKeys;
   var statusColors = { pending: 'warning', approved: 'success', delayed: 'info', modified: 'primary', cancelled: 'danger' };
   var statusLabels = { pending: 'Pending', approved: 'Approved', delayed: 'Delayed', modified: 'Modified', cancelled: 'Cancelled' };
 
   var groupColors = {
     suspend: 'danger',
     reduce: 'warning',
+    delayed: 'info',
     plan: 'info',
     restock: 'success',
     prioritize: 'warning',
@@ -816,6 +832,7 @@ function renderWeeklyMeeting() {
   var groupIcons = {
     suspend: '[X]',
     reduce: '[~]',
+    delayed: '[‚åõ]',
     plan: '[>]',
     restock: '[!]',
     prioritize: '[!]',
@@ -828,12 +845,14 @@ function renderWeeklyMeeting() {
   var stockoutCount = 0;
   var pendingPlans = 0;
   var approvedPlans = 0;
+  var delayedPlans = 0;
 
-  Object.keys(groups).forEach(function(key) {
+  sortedKeys.forEach(function(key) {
     var g = groups[key];
     totalItems += g.items.length;
     pendingPlans += g.pendingPlans;
     approvedPlans += g.approvedPlans;
+    delayedPlans += g.delayedPlans;
     g.items.forEach(function(item) {
       totalScrapValue += item.scrapValue;
       if (item.stockoutWeek !== null && item.stockoutWeek < 12) stockoutCount++;
@@ -857,9 +876,9 @@ function renderWeeklyMeeting() {
       '<div style="font-size:10px;color:#166534;text-transform:uppercase;letter-spacing:.5px">Approved</div>' +
       '<div style="font-size:20px;font-weight:700;color:#166534">' + approvedPlans + '</div>' +
     '</div>' +
-    '<div class="stat-card" style="padding:12px;background:#e0e7ff;border-radius:8px">' +
-      '<div style="font-size:10px;color:#3730a3;text-transform:uppercase;letter-spacing:.5px">Materials</div>' +
-      '<div style="font-size:20px;font-weight:700;color:#3730a3">' + totalItems + '</div>' +
+    '<div class="stat-card" style="padding:12px;background:#bae6fd;border-radius:8px">' +
+      '<div style="font-size:10px;color:#075985;text-transform:uppercase;letter-spacing:.5px">Delayed</div>' +
+      '<div style="font-size:20px;font-weight:700;color:#075985">' + delayedPlans + '</div>' +
     '</div>' +
     '<div class="stat-card" style="padding:12px;background:#cffafe;border-radius:8px">' +
       '<div style="font-size:10px;color:#155e75;text-transform:uppercase;letter-spacing:.5px">View Mode</div>' +
@@ -867,48 +886,35 @@ function renderWeeklyMeeting() {
     '</div>' +
   '</div>';
 
-  Object.keys(groups).forEach(function(key) {
+  sortedKeys.forEach(function(key) {
     var g = groups[key];
     if (g.items.length === 0) return;
 
     var color = groupColors[key];
     var icon = groupIcons[key];
-    var summaryMetrics;
-    if (weeklySortBy === 'stockout') {
-      summaryMetrics = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;font-size:11px">' +
-        '<div style="padding:6px 8px;background:#fff;border-radius:4px;text-align:center">' +
-          '<div style="color:var(--gray-500)">Stockout <4w</div>' +
-          '<div style="font-size:15px;font-weight:700;color:var(--danger)">' + g.stockoutIn4w + '</div>' +
-        '</div>' +
-        '<div style="padding:6px 8px;background:#fff;border-radius:4px;text-align:center">' +
-          '<div style="color:var(--gray-500)">Stockout <8w</div>' +
-          '<div style="font-size:15px;font-weight:700;color:var(--warning)">' + g.stockoutIn8w + '</div>' +
-        '</div>' +
-        '<div style="padding:6px 8px;background:#fff;border-radius:4px;text-align:center">' +
-          '<div style="color:var(--gray-500)">Avg Impact Weeks</div>' +
-          '<div style="font-size:15px;font-weight:700;color:#4f46e5">' + g.avgImpactWeeks.toFixed(1) + 'w</div>' +
-        '</div>' +
-      '</div>';
-    } else {
-      summaryMetrics = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;font-size:11px">' +
-        '<div style="padding:6px 8px;background:#fff;border-radius:4px;text-align:center">' +
-          '<div style="color:var(--gray-500)">Scrap Amount</div>' +
-          '<div style="font-size:15px;font-weight:700;color:var(--danger)">¬•' + g.totalScrapValue.toFixed(0) + '</div>' +
-        '</div>' +
-        '<div style="padding:6px 8px;background:#fff;border-radius:4px;text-align:center">' +
-          '<div style="color:var(--gray-500)">Scrap Qty</div>' +
-          '<div style="font-size:15px;font-weight:700;color:var(--warning)">' + g.totalScrapQty.toFixed(0) + '</div>' +
-        '</div>' +
-        '<div style="padding:6px 8px;background:#fff;border-radius:4px;text-align:center">' +
-          '<div style="color:var(--gray-500)">Recoverable</div>' +
-          '<div style="font-size:15px;font-weight:700;color:#16a34a">¬•' + g.totalScrapValue.toFixed(0) + '</div>' +
-        '</div>' +
-      '</div>';
-    }
+    var summaryMetrics = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;font-size:11px">' +
+      '<div style="padding:6px 8px;background:#fff;border-radius:4px;text-align:center">' +
+        '<div style="color:var(--gray-500)">Scrap Amount</div>' +
+        '<div style="font-size:14px;font-weight:700;color:var(--danger)">¬•' + g.totalScrapValue.toFixed(0) + '</div>' +
+      '</div>' +
+      '<div style="padding:6px 8px;background:#fff;border-radius:4px;text-align:center">' +
+        '<div style="color:var(--gray-500)">Scrap Qty</div>' +
+        '<div style="font-size:14px;font-weight:700;color:var(--warning)">' + g.totalScrapQty.toFixed(0) + '</div>' +
+      '</div>' +
+      '<div style="padding:6px 8px;background:#fff;border-radius:4px;text-align:center">' +
+        '<div style="color:var(--gray-500)">Avg Impact Wks</div>' +
+        '<div style="font-size:14px;font-weight:700;color:#4f46e5">' + g.avgImpactWeeks.toFixed(1) + 'w</div>' +
+      '</div>' +
+      '<div style="padding:6px 8px;background:#fff;border-radius:4px;text-align:center">' +
+        '<div style="color:var(--gray-500)">Stockout <4w / <8w</div>' +
+        '<div style="font-size:14px;font-weight:700;color:var(--warning)">' + g.stockoutIn4w + ' / ' + g.stockoutIn8w + '</div>' +
+      '</div>' +
+    '</div>';
 
     var planBadges = '';
     if (g.pendingPlans > 0) planBadges += '<span class="badge badge-warning" style="margin-left:8px">' + g.pendingPlans + ' pending</span>';
     if (g.approvedPlans > 0) planBadges += '<span class="badge badge-success" style="margin-left:6px">' + g.approvedPlans + ' approved</span>';
+    if (g.delayedPlans > 0) planBadges += '<span class="badge badge-info" style="margin-left:6px">' + g.delayedPlans + ' delayed</span>';
 
     html += '<div class="weekly-group" style="margin-bottom:20px">' +
       '<div class="group-header" style="padding:12px 14px;background:var(--gray-50);border-radius:8px 8px 0 0;border:1px solid var(--gray-200);border-bottom:none">' +
@@ -925,11 +931,9 @@ function renderWeeklyMeeting() {
           '<thead>' +
             '<tr style="background:var(--gray-50)">' +
               '<th style="text-align:left;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Material</th>' +
-              (weeklySortBy === 'stockout'
-                ? '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Stockout Time</th>' +
-                  '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Impact (wks)</th>'
-                : '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Scrap Value</th>' +
-                  '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Scrap Qty</th>') +
+              '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Scrap Value</th>' +
+              '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Impact Wks</th>' +
+              '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Stockout</th>' +
               '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Stock / Usage</th>' +
               '<th style="text-align:center;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Plan</th>' +
             '</tr>' +
@@ -946,38 +950,28 @@ function renderWeeklyMeeting() {
         planCell = '<span style="color:var(--gray-400);font-size:11px">n/a</span>';
       }
 
-      var stockoutCell = '';
-      if (weeklySortBy === 'stockout') {
-        var stockoutText = item.stockoutWeek !== null
-          ? ('W' + item.stockoutWeek + '<br><span style="font-size:10px;color:var(--gray-500)">' + formatDate(item.stockoutDate) + '</span>')
-          : '<span style="color:var(--gray-400)">>12w</span>';
-        var stockoutColor = item.stockoutWeek !== null && item.stockoutWeek < 4 ? 'var(--danger)'
-          : (item.stockoutWeek !== null && item.stockoutWeek < 8 ? 'var(--warning)' : 'var(--gray-500)');
-        stockoutCell =
-          '<td style="padding:10px 12px;font-size:13px;text-align:right;font-weight:600;color:' + stockoutColor + '">' + stockoutText + '</td>' +
-          '<td style="padding:10px 12px;font-size:13px;text-align:right;font-weight:700">' +
-            (item.stockoutWeek !== null && item.stockoutWeek < 12
-              ? '<span style="color:var(--warning)">' + item.impactWeeks + 'w affected</span>'
-              : '<span style="color:var(--gray-400)">-</span>') +
-          '</td>';
-      } else {
-        var scrapText = item.scrapValue > 0
-          ? ('<span style="color:var(--danger);font-weight:700">¬•' + item.scrapValue.toFixed(0) + '</span>')
-          : '<span style="color:var(--gray-400)">-</span>';
-        var scrapQty = item.scrapValue > 0
-          ? ('<span style="color:var(--warning)">' + item.scrapQty.toFixed(0) + ' ' + item.unit + '</span>')
-          : '<span style="color:var(--gray-400)">-</span>';
-        stockoutCell =
-          '<td style="padding:10px 12px;font-size:13px;text-align:right">' + scrapText + '</td>' +
-          '<td style="padding:10px 12px;font-size:13px;text-align:right">' + scrapQty + '</td>';
-      }
+      var scrapText = item.scrapValue > 0
+        ? ('<span style="color:var(--danger);font-weight:700">¬•' + item.scrapValue.toFixed(0) + '</span>' +
+          (item.scrapQty > 0 ? '<br><span style="font-size:10px;color:var(--gray-500)">' + item.scrapQty.toFixed(0) + ' ' + item.unit + '</span>' : ''))
+        : '<span style="color:var(--gray-400)">-</span>';
+
+      var impactText = item.stockoutWeek !== null && item.stockoutWeek < 12
+        ? '<span style="color:var(--warning);font-weight:700">' + item.impactWeeks.toFixed(0) + 'w</span>'
+        : '<span style="color:var(--gray-400)">-</span>';
+
+      var stockoutText = item.stockoutWeek !== null
+        ? ('<span style="font-weight:700;color:' + (item.stockoutWeek < 4 ? 'var(--danger)' : (item.stockoutWeek < 8 ? 'var(--warning)' : 'var(--gray-600)')) + '">W' + item.stockoutWeek + '</span>' +
+          '<br><span style="font-size:10px;color:var(--gray-500)">' + formatDate(item.stockoutDate) + '</span>')
+        : '<span style="color:var(--gray-400)">>12w</span>';
 
       html += '<tr style="border-top:1px solid var(--gray-100);cursor:pointer" onclick="showDetailByName(\'' + item.name + '\')">' +
         '<td style="padding:10px 12px;font-size:13px;font-weight:500;color:var(--gray-800)">' +
           item.name +
           (item.hasNearExpiry ? ' <span title="Has near-expiry batch" style="color:var(--danger);font-size:11px">[!]</span>' : '') +
         '</td>' +
-        stockoutCell +
+        '<td style="padding:10px 12px;font-size:13px;text-align:right">' + scrapText + '</td>' +
+        '<td style="padding:10px 12px;font-size:13px;text-align:right">' + impactText + '</td>' +
+        '<td style="padding:10px 12px;font-size:13px;text-align:right">' + stockoutText + '</td>' +
         '<td style="padding:10px 12px;font-size:12px;text-align:right;color:var(--gray-600)">' +
           item.totalStock + ' ' + item.unit + '<br>' +
           '<span style="color:var(--gray-400)">' + item.weeklyUsage.toFixed(1) + '/wk</span>' +
@@ -1254,282 +1248,333 @@ function onVerifyMaterialChange() {
 }
 
 function runSimulation() {
-  var name = document.getElementById('verifyMaterial').value;
-  var qty = parseFloat(document.getElementById('verifyQty').value) || 0;
-  var expiry = document.getElementById('verifyExpiry').value;
-  var weeklyUsage = parseFloat(document.getElementById('verifyWeeklyUsage').value) || 0;
-
-  if (!name || qty <= 0) {
-    document.getElementById('verifyResult').innerHTML = '';
-    return;
-  }
-
-  var fifo = getFIFOBatches(name);
-  if (fifo.length === 0) {
-    document.getElementById('verifyResult').innerHTML =
-      '<div class="verify-result warn"><h4>‚ö†Ô∏è No Existing Stock</h4>' +
-      '<div class="detail">No existing stock for "' + name + '". Please confirm if base stock needs to be established.</div></div>';
-    return;
-  }
-
-  var unit = fifo[0].unit;
-  var totalExisting = fifo.reduce(function(s, b) { return s + b.currentStock; }, 0);
-  var newBatchExpiry = expiry || addDays(today(), 365);
-  var sim = simulateConsumption(name, weeklyUsage, qty, newBatchExpiry);
-  var simWithoutNew = simulateConsumption(name, weeklyUsage, 0, null);
-
-  var scrapDiff = sim.totalScrappedValue - simWithoutNew.totalScrappedValue;
-  var hasOldBatchRisk = fifo.some(function(b) {
-    var remaining = daysBetween(today(), b.expiryDate);
-    return remaining <= 90 && b.currentStock > 0;
-  });
-
-  var fifoWithNew = sim.allBatches;
-  var newBatchPosition = fifoWithNew.findIndex(function(b) { return b.isNew; }) + 1;
-
-  var oldBatchesNearExpiry = fifo.filter(function(b) {
-    return daysBetween(today(), b.expiryDate) <= 90 && b.currentStock > 0;
-  });
-
   var html = '';
+  var name = '', qty = 0, expiry = '', weeklyUsage = 0;
+  var newBatchPrice = 0, effectivePrice = 0;
+  var fifo = [], unit = 'pcs', totalExisting = 0;
+  var newBatchExpiry = '';
+  var sim = { events: [], totalScrappedQty: 0, totalScrappedValue: 0, stockoutWeek: null, stockoutDate: null, allBatches: [] };
+  var simWithoutNew = { events: [], totalScrappedQty: 0, totalScrappedValue: 0, stockoutWeek: null, stockoutDate: null };
+  var scrapDiff = 0, hasOldBatchRisk = false, newBatchPosition = 1;
+  var oldBatchesNearExpiry = [];
   var resultType = 'pass';
+  var suggestion = { suggestedPurchaseDate: null, suggestedQty: 0, coverageWeeks: null, actionNote: '', oldBatchesToUse: [] };
 
-  if (weeklyUsage <= 0) {
-    resultType = 'warn';
-    html = '<div class="verify-result warn">' +
-      '<h4>‚ö†Ô∏è Insufficient Usage Data</h4>' +
-      '<div class="detail">' +
-        'No usage data in past 8 weeks for "' + name + '". Cannot accurately assess purchase decision.<br>' +
-        'Current stock: <strong>' + totalExisting + ' ' + unit + '</strong>, after purchase: <strong>' + (totalExisting + qty) + ' ' + unit + '</strong>.<br>' +
-        'Please add usage records or purchase cautiously.' +
-      '</div>' +
-    '</div>';
-  } else if (scrapDiff > 0) {
-    resultType = 'block';
-    var weeksToUseOld = simWithoutNew.stockoutWeek !== null ? simWithoutNew.stockoutWeek : 'inf';
-    var suggestedQty = Math.max(0, Math.floor(weeklyUsage * Math.max(0, 2 - weeksToUseOld)));
-    html = '<div class="verify-result block">' +
-      '<h4>[X] Overstock Risk - NOT recommended</h4>' +
-      '<div class="detail">' +
-        'Proposed purchase: <strong>' + qty + ' ' + unit + '</strong>, new batch expiry: <strong>' + formatDate(newBatchExpiry) + '</strong>.<br>' +
-        'FIFO priority: <strong>#' + newBatchPosition + '</strong>, need to consume ' + (newBatchPosition-1) + ' older batches first.<br><br>' +
-        '<strong>Analysis:</strong><br>' +
-        '‚Ä?Projected additional scrap: <strong style="color:var(--danger)">¬•' + scrapDiff.toFixed(2) + '</strong> (total scrap ¬•' + sim.totalScrappedValue.toFixed(2) + ')<br>' +
-        '‚Ä?Additional scrap quantity: <strong>' + (sim.totalScrappedQty - simWithoutNew.totalScrappedQty) + ' ' + unit + '</strong><br>' +
-        (oldBatchesNearExpiry.length > 0 ?
-          '‚Ä?Near-expiry batches not consumed: ' + oldBatchesNearExpiry.map(function(b) {
-            return 'Batch "' + b.batchNo + '" (' + b.currentStock + ' ' + unit + ', ' + daysBetween(today(), b.expiryDate) + 'd left)';
-          }).join(', ') + '<br>' : '') +
-        '<br>' +
-        '<strong>[!] Recommendations:</strong><br>' +
-        (oldBatchesNearExpiry.length > 0 ? '‚Ä?<span style="color:var(--danger)">Consume near-expiry batches first</span> to avoid waste<br>' : '') +
-        '‚Ä?Suggested purchase qty: <strong>' + suggestedQty + ' ' + unit + '</strong> (2-week safety stock)<br>' +
-        (simWithoutNew.stockoutWeek !== null && simWithoutNew.stockoutWeek > 4 ?
-          '‚Ä?Suggest delaying purchase by <strong>' + (simWithoutNew.stockoutWeek - 4) + ' weeks</strong><br>' : '') +
-        '‚Ä?Current stock lasts <strong>' + weeksToUseOld + ' weeks</strong>' +
-      '</div>' +
-    '</div>';
-  } else if (newBatchPosition > 1 && hasOldBatchRisk) {
-    resultType = 'warn';
-    html = '<div class="verify-result warn">' +
-      '<h4>‚ö†Ô∏è Suggestion: Consume older batches first, delay purchase</h4>' +
-      '<div class="detail">' +
-        'FIFO priority: <strong>#' + newBatchPosition + '</strong>, need to consume ' + (newBatchPosition-1) + ' older batches first.<br><br>' +
-        '<strong>Older Batch Risks:</strong><br>' +
-        oldBatchesNearExpiry.map(function(b) {
-          var r = assessBatchRisk(b);
-          return '‚Ä?Batch "' + b.batchNo + '": ' + b.currentStock + ' ' + unit + ', ' + r.remaining + 'd left, ' +
-            (r.canFinish ? 'Expected to finish normally' : '<strong style="color:var(--danger)">Will expire, scrap ¬•' + (b.currentStock * (b.price||0)).toFixed(2) + '</strong>');
-        }).join('<br>') +
-        '<br><br>' +
-        '<strong>[!] Recommendations:</strong><br>' +
-        '‚Ä?Prioritize near-expiry batches<br>' +
-        '‚Ä?Suggest delaying purchase by <strong>' + (simWithoutNew.stockoutWeek !== null ? Math.max(1, simWithoutNew.stockoutWeek - 3) : 4) + ' weeks</strong><br>' +
-        '‚Ä?Current stock lasts <strong>' + (simWithoutNew.stockoutWeek !== null ? simWithoutNew.stockoutWeek + ' weeks' : '>2 years') + '</strong>' +
-      '</div>' +
-    '</div>';
-  } else if (sim.stockoutWeek !== null && sim.stockoutWeek < 4) {
-    resultType = 'pass';
-    html = '<div class="verify-result pass">' +
-      '<h4>[‚úì] Purchase Approved</h4>' +
-      '<div class="detail">' +
-        'Proposed purchase: <strong>' + qty + ' ' + unit + '</strong>, new batch expiry: <strong>' + formatDate(newBatchExpiry) + '</strong>.<br>' +
-        'FIFO priority: <strong>#' + newBatchPosition + '</strong><br>' +
-        'At <strong>' + weeklyUsage.toFixed(1) + ' ' + unit + '/wk</strong>, current stock only lasts <strong>' + simWithoutNew.stockoutWeek + ' weeks</strong>.<br>' +
-        'No additional scrap expected, overall risk controlled.' +
-      '</div>' +
-    '</div>';
-  } else {
-    resultType = 'pass';
-    html = '<div class="verify-result pass">' +
-      '<h4>[‚úì] Purchase Approved</h4>' +
-      '<div class="detail">' +
-        'Proposed purchase: <strong>' + qty + ' ' + unit + '</strong>, new batch expiry: <strong>' + formatDate(newBatchExpiry) + '</strong>.<br>' +
-        'FIFO priority: <strong>#' + newBatchPosition + '</strong><br>' +
-        'At <strong>' + weeklyUsage.toFixed(1) + ' ' + unit + '/wk</strong>, purchase can be reasonably consumed before expiry.<br>' +
-        'Projected scrap: <strong>¬•' + sim.totalScrappedValue.toFixed(2) + '</strong>' +
-        (sim.totalScrappedValue > 0 ? ' (monitor near-expiry batches)' : ' (no scrap risk)') +
-      '</div>' +
-    '</div>';
-  }
+  try {
+    name = document.getElementById('verifyMaterial').value;
+    qty = parseFloat(document.getElementById('verifyQty').value) || 0;
+    expiry = document.getElementById('verifyExpiry').value;
+    weeklyUsage = parseFloat(document.getElementById('verifyWeeklyUsage').value) || 0;
+    newBatchPrice = parseFloat(document.getElementById('verifyPrice').value) || 0;
 
-  if (sim.events.length > 0) {
-    html += '<div class="sim-timeline">' +
-      '<h5>[=] Post-Purchase Consumption Timeline</h5>' +
-      sim.events.slice(0, 10).map(function(ev) {
-        var typeBadge = '';
-        if (ev.type === 'scrap') typeBadge = '<span class="badge badge-danger">Scrap</span>';
-        if (ev.type === 'deplete') typeBadge = '<span class="badge badge-info">Depleted</span>';
-        if (ev.type === 'stockout') typeBadge = '<span class="badge badge-warning">Stockout</span>';
-        return '<div class="sim-event">' +
-          '<span class="sim-date">' + formatDate(ev.date) + '</span>' +
-          '<span class="sim-type">' + typeBadge + '</span>' +
-          '<span class="sim-desc">' + ev.desc + '</span>' +
-        '</div>';
-      }).join('') +
-      (sim.events.length > 10 ? '<div style="padding:8px 0;font-size:11px;color:var(--gray-400)">...and ' + (sim.events.length-10) + ' more events</div>' : '') +
-    '</div>';
-  }
-
-  var newBatchPrice = parseFloat(document.getElementById('verifyPrice').value) || 0;
-  lastSimulationSnapshot = {
-    materialName: name,
-    qty: qty,
-    newBatchExpiry: newBatchExpiry,
-    newBatchPrice: newBatchPrice,
-    weeklyUsage: weeklyUsage,
-    resultType: resultType,
-    recommendationText: recommendationText || '',
-    suggestedPurchaseDate: null,
-    suggestedQty: qty || 0,
-    coverageWeeks: null,
-    actionNote: '',
-    oldBatchesToHandle: [],
-    simWithNew: {
-      totalScrappedValue: sim.totalScrappedValue,
-      totalScrappedQty: sim.totalScrappedQty,
-      stockoutWeek: sim.stockoutWeek,
-      stockoutDate: sim.stockoutDate
-    },
-    simWithoutNew: {
-      totalScrappedValue: simWithoutNew.totalScrappedValue,
-      totalScrappedQty: simWithoutNew.totalScrappedQty,
-      stockoutWeek: simWithoutNew.stockoutWeek,
-      stockoutDate: simWithoutNew.stockoutDate
-    }
-  };
-
-  if (weeklyUsage > 0) {
-    var suggestedPurchaseDate, suggestedQty, coverageWeeks, actionNote;
-    var totalExisting = fifo.reduce(function(s, b) { return s + b.currentStock; }, 0);
-
-    if (simWithoutNew.stockoutWeek !== null) {
-      var safetyWeeks = 2;
-      var purchaseLeadWeeks = Math.max(0, simWithoutNew.stockoutWeek - safetyWeeks);
-      suggestedPurchaseDate = addDays(today(), purchaseLeadWeeks * 7);
-      suggestedQty = Math.ceil(weeklyUsage * 4);
-      coverageWeeks = simWithoutNew.stockoutWeek + (suggestedQty / weeklyUsage);
-    } else {
-      suggestedPurchaseDate = 'No urgent need';
-      suggestedQty = 0;
-      coverageWeeks = '>2 years';
+    if (!name || qty <= 0) {
+      document.getElementById('verifyResult').innerHTML = '';
+      try { renderPurchasePlansInVerify(); } catch(e3) {}
+      return;
     }
 
-    var oldBatchesToUse = fifo.filter(function(b) {
-      return daysBetween(today(), b.expiryDate) <= 90 && b.currentStock > 0;
-    }).map(function(b) {
-      var r = assessBatchRisk(b);
-      return {
-        batchNo: b.batchNo,
-        stock: b.currentStock,
-        unit: unit,
-        remaining: r.remaining,
-        risk: r.level,
-        canFinish: r.canFinish
-      };
+    fifo = getFIFOBatches(name) || [];
+    if (fifo.length === 0) {
+      html = '<div class="verify-result warn"><h4>‚ö†Ô∏è No Existing Stock</h4>' +
+        '<div class="detail">No existing stock for "' + name + '". Please confirm if base stock needs to be established.</div></div>';
+      document.getElementById('verifyResult').innerHTML = html;
+      try { renderPurchasePlansInVerify(); } catch(e3) {}
+      return;
+    }
+
+    unit = fifo[0].unit;
+    totalExisting = fifo.reduce(function(s, b) { return s + (b.currentStock || 0); }, 0);
+    newBatchExpiry = expiry || addDays(today(), 365);
+
+    var avgPrice = 0;
+    try {
+      var priceSum = fifo.reduce(function(s, b) { return s + (parseFloat(b.price) || 0); }, 0);
+      avgPrice = fifo.length > 0 ? (priceSum / fifo.length) : 0;
+    } catch(ep) { avgPrice = 0; }
+    effectivePrice = newBatchPrice > 0 ? newBatchPrice : avgPrice;
+
+    try {
+      sim = simulateConsumption(name, weeklyUsage, qty, newBatchExpiry, effectivePrice) || sim;
+      simWithoutNew = simulateConsumption(name, weeklyUsage, 0, null) || simWithoutNew;
+    } catch (eSim) {
+      console.error('simulateConsumption error:', eSim);
+    }
+
+    scrapDiff = (sim.totalScrappedValue || 0) - (simWithoutNew.totalScrappedValue || 0);
+    hasOldBatchRisk = fifo.some(function(b) {
+      var remaining = daysBetween(today(), b.expiryDate);
+      return remaining <= 90 && (b.currentStock || 0) > 0;
     });
+    oldBatchesNearExpiry = fifo.filter(function(b) {
+      return daysBetween(today(), b.expiryDate) <= 90 && (b.currentStock || 0) > 0;
+    });
+    var fifoWithNew = sim.allBatches || fifo;
+    newBatchPosition = Math.max(1, fifoWithNew.findIndex(function(b) { return b.isNew; }) + 1);
 
-    if (scrapDiff > 0) {
-      actionNote = 'Reduce purchase or delay purchase - near-expiry batches need to be consumed first';
-      suggestedQty = Math.max(0, Math.floor(weeklyUsage * Math.max(0, 2 - simWithoutNew.stockoutWeek)));
-    } else if (hasOldBatchRisk) {
-      actionNote = 'Prioritize older batch consumption, consider delaying purchase';
+    var recommendationText = '';
+
+    if (weeklyUsage <= 0) {
+      resultType = 'warn';
+      recommendationText = 'No usage data - purchase with caution';
+      html = '<div class="verify-result warn">' +
+        '<h4>‚ö†Ô∏è Insufficient Usage Data</h4>' +
+        '<div class="detail">' +
+          'No usage data in past 8 weeks for "' + name + '". Cannot accurately assess purchase decision.<br>' +
+          'Current stock: <strong>' + totalExisting + ' ' + unit + '</strong>, after purchase: <strong>' + (totalExisting + qty) + ' ' + unit + '</strong>.<br>' +
+          'Please add usage records or purchase cautiously.' +
+        '</div>' +
+      '</div>';
+    } else if (scrapDiff > 0) {
+      resultType = 'block';
+      var weeksToUseOld = simWithoutNew.stockoutWeek !== null ? simWithoutNew.stockoutWeek : 'inf';
+      var suggestedQtyBlock = Math.max(0, Math.floor(weeklyUsage * Math.max(0, 2 - (simWithoutNew.stockoutWeek || 0))));
+      recommendationText = 'Overstock risk - not recommended';
+      suggestion.suggestedQty = suggestedQtyBlock;
+      html = '<div class="verify-result block">' +
+        '<h4>[X] Overstock Risk - NOT recommended</h4>' +
+        '<div class="detail">' +
+          'Proposed purchase: <strong>' + qty + ' ' + unit + '</strong>, new batch expiry: <strong>' + formatDate(newBatchExpiry) + '</strong>' +
+          (effectivePrice > 0 ? ', unit price: <strong>¬•' + effectivePrice.toFixed(2) + '</strong>' : '') + '.<br>' +
+          'FIFO priority: <strong>#' + newBatchPosition + '</strong>, need to consume ' + (newBatchPosition-1) + ' older batches first.<br><br>' +
+          '<strong>Analysis:</strong><br>' +
+          '‚Ä?Projected additional scrap: <strong style="color:var(--danger)">¬•' + scrapDiff.toFixed(2) + '</strong> (total scrap ¬•' + sim.totalScrappedValue.toFixed(2) + ')<br>' +
+          '‚Ä?Additional scrap quantity: <strong>' + ((sim.totalScrappedQty || 0) - (simWithoutNew.totalScrappedQty || 0)) + ' ' + unit + '</strong><br>' +
+          (oldBatchesNearExpiry.length > 0 ?
+            '‚Ä?Near-expiry batches not consumed: ' + oldBatchesNearExpiry.map(function(b) {
+              return 'Batch "' + b.batchNo + '" (' + b.currentStock + ' ' + unit + ', ' + daysBetween(today(), b.expiryDate) + 'd left)';
+            }).join(', ') + '<br>' : '') +
+          '<br>' +
+          '<strong>[!] Recommendations:</strong><br>' +
+          (oldBatchesNearExpiry.length > 0 ? '‚Ä?<span style="color:var(--danger)">Consume near-expiry batches first</span> to avoid waste<br>' : '') +
+          '‚Ä?Suggested purchase qty: <strong>' + suggestedQtyBlock + ' ' + unit + '</strong> (2-week safety stock)<br>' +
+          (simWithoutNew.stockoutWeek !== null && simWithoutNew.stockoutWeek > 4 ?
+            '‚Ä?Suggest delaying purchase by <strong>' + (simWithoutNew.stockoutWeek - 4) + ' weeks</strong><br>' : '') +
+          '‚Ä?Current stock lasts <strong>' + weeksToUseOld + ' weeks</strong>' +
+        '</div>' +
+      '</div>';
+    } else if (newBatchPosition > 1 && hasOldBatchRisk) {
+      resultType = 'warn';
+      recommendationText = 'Delay purchase - consume older batches first';
+      html = '<div class="verify-result warn">' +
+        '<h4>‚ö†Ô∏è Suggestion: Consume older batches first, delay purchase</h4>' +
+        '<div class="detail">' +
+          'FIFO priority: <strong>#' + newBatchPosition + '</strong>, need to consume ' + (newBatchPosition-1) + ' older batches first.<br><br>' +
+          '<strong>Older Batch Risks:</strong><br>' +
+          oldBatchesNearExpiry.map(function(b) {
+            var r;
+            try { r = assessBatchRisk(b); } catch(ea) { r = { remaining: 0, canFinish: true }; }
+            return '‚Ä?Batch "' + b.batchNo + '": ' + b.currentStock + ' ' + unit + ', ' + r.remaining + 'd left, ' +
+              (r.canFinish ? 'Expected to finish normally' : '<strong style="color:var(--danger)">Will expire, scrap ¬•' + (b.currentStock * ((b.price||0))).toFixed(2) + '</strong>');
+          }).join('<br>') +
+          '<br><br>' +
+          '<strong>[!] Recommendations:</strong><br>' +
+          '‚Ä?Prioritize near-expiry batches<br>' +
+          '‚Ä?Suggest delaying purchase by <strong>' + (simWithoutNew.stockoutWeek !== null ? Math.max(1, simWithoutNew.stockoutWeek - 3) : 4) + ' weeks</strong><br>' +
+          '‚Ä?Current stock lasts <strong>' + (simWithoutNew.stockoutWeek !== null ? simWithoutNew.stockoutWeek + ' weeks' : '>2 years') + '</strong>' +
+        '</div>' +
+      '</div>';
     } else if (sim.stockoutWeek !== null && sim.stockoutWeek < 4) {
-      actionNote = 'Stock is tight, recommended to purchase soon';
+      resultType = 'pass';
+      recommendationText = 'Stock tight - approved';
+      html = '<div class="verify-result pass">' +
+        '<h4>[‚úì] Purchase Approved</h4>' +
+        '<div class="detail">' +
+          'Proposed purchase: <strong>' + qty + ' ' + unit + '</strong>, new batch expiry: <strong>' + formatDate(newBatchExpiry) + '</strong>' +
+          (effectivePrice > 0 ? ', unit price: <strong>¬•' + effectivePrice.toFixed(2) + '</strong>' : '') + '.<br>' +
+          'FIFO priority: <strong>#' + newBatchPosition + '</strong><br>' +
+          'At <strong>' + weeklyUsage.toFixed(1) + ' ' + unit + '/wk</strong>, current stock only lasts <strong>' + sim.stockoutWeek + ' weeks</strong>.<br>' +
+          'No additional scrap expected, overall risk controlled.' +
+        '</div>' +
+      '</div>';
     } else {
-      actionNote = 'Normal procurement';
-    }
-
-    html += '<div class="purchase-plan">' +
-      '<h5>[+] Purchase Plan Draft</h5>' +
-      '<div class="plan-grid">' +
-        '<div class="plan-item">' +
-          '<div class="plan-label">Suggested Purchase Date</div>' +
-          '<div class="plan-value">' + (typeof suggestedPurchaseDate === 'string' ? suggestedPurchaseDate : formatDate(suggestedPurchaseDate)) + '</div>' +
-        '</div>' +
-        '<div class="plan-item">' +
-          '<div class="plan-label">Suggested Qty</div>' +
-          '<div class="plan-value">' + suggestedQty + ' ' + unit + '</div>' +
-        '</div>' +
-        '<div class="plan-item">' +
-          '<div class="plan-label">Est. Coverage</div>' +
-          '<div class="plan-value">' + (typeof coverageWeeks === 'string' ? coverageWeeks : coverageWeeks.toFixed(1) + ' weeks') + '</div>' +
-        '</div>' +
-        '<div class="plan-item">' +
-          '<div class="plan-label">Action Note</div>' +
-          '<div class="plan-value" style="font-size:12px">' + actionNote + '</div>' +
+      resultType = 'pass';
+      recommendationText = 'Purchase approved - normal';
+      html = '<div class="verify-result pass">' +
+        '<h4>[‚úì] Purchase Approved</h4>' +
+        '<div class="detail">' +
+          'Proposed purchase: <strong>' + qty + ' ' + unit + '</strong>, new batch expiry: <strong>' + formatDate(newBatchExpiry) + '</strong>' +
+          (effectivePrice > 0 ? ', unit price: <strong>¬•' + effectivePrice.toFixed(2) + '</strong>' : '') + '.<br>' +
+          'FIFO priority: <strong>#' + newBatchPosition + '</strong><br>' +
+          'At <strong>' + weeklyUsage.toFixed(1) + ' ' + unit + '/wk</strong>, purchase can be reasonably consumed before expiry.<br>' +
+          'Projected scrap: <strong>¬•' + (sim.totalScrappedValue || 0).toFixed(2) + '</strong>' +
+          ((sim.totalScrappedValue || 0) > 0 ? ' (monitor near-expiry batches)' : ' (no scrap risk)') +
         '</div>' +
       '</div>';
+    }
 
-    if (oldBatchesToUse.length > 0) {
-      html += '<div class="plan-old-batches">' +
-        '<div class="plan-label" style="margin-bottom:8px">Older Batches to Handle First</div>' +
-        oldBatchesToUse.map(function(b) {
-          var badgeColor = b.risk === 'high' ? 'danger' : (b.risk === 'medium' ? 'warning' : 'info');
-          var finishText = b.canFinish ? 'expected to finish' : '<span style="color:var(--danger)">WILL EXPIRE</span>';
-          return '<div class="old-batch-item">' +
-            '<span class="badge badge-' + badgeColor + '">' + b.batchNo + '</span> ' +
-            '<span style="color:var(--gray-500)">' + b.stock + ' ' + b.unit + ', ' + b.remaining + 'd left, ' + finishText + '</span>' +
+    if (sim.events && sim.events.length > 0) {
+      try {
+        html += '<div class="sim-timeline">' +
+          '<h5>[=] Post-Purchase Consumption Timeline</h5>' +
+          sim.events.slice(0, 10).map(function(ev) {
+            var typeBadge = '';
+            if (ev.type === 'scrap') typeBadge = '<span class="badge badge-danger">Scrap</span>';
+            if (ev.type === 'deplete') typeBadge = '<span class="badge badge-info">Depleted</span>';
+            if (ev.type === 'stockout') typeBadge = '<span class="badge badge-warning">Stockout</span>';
+            return '<div class="sim-event">' +
+              '<span class="sim-date">' + formatDate(ev.date) + '</span>' +
+              '<span class="sim-type">' + typeBadge + '</span>' +
+              '<span class="sim-desc">' + (ev.desc || '') + '</span>' +
+            '</div>';
+          }).join('') +
+          (sim.events.length > 10 ? '<div style="padding:8px 0;font-size:11px;color:var(--gray-400)">...and ' + (sim.events.length-10) + ' more events</div>' : '') +
+        '</div>';
+      } catch(eEv) { console.error('timeline error:', eEv); }
+    }
+
+    if (weeklyUsage > 0) {
+      try {
+        var suggestedPurchaseDate, suggestedQtyLocal, coverageWeeksLocal, actionNoteLocal;
+        if (simWithoutNew.stockoutWeek !== null) {
+          var safetyWeeks = 2;
+          var purchaseLeadWeeks = Math.max(0, simWithoutNew.stockoutWeek - safetyWeeks);
+          suggestedPurchaseDate = addDays(today(), purchaseLeadWeeks * 7);
+          suggestedQtyLocal = Math.ceil(weeklyUsage * 4);
+          coverageWeeksLocal = simWithoutNew.stockoutWeek + (suggestedQtyLocal / weeklyUsage);
+        } else {
+          suggestedPurchaseDate = 'No urgent need';
+          suggestedQtyLocal = 0;
+          coverageWeeksLocal = '>2 years';
+        }
+
+        var oldBatchesToUseLocal = oldBatchesNearExpiry.map(function(b) {
+          var r;
+          try { r = assessBatchRisk(b); } catch(ea) { r = { remaining: 0, level: 'low', canFinish: true }; }
+          return {
+            batchNo: b.batchNo,
+            stock: b.currentStock,
+            unit: unit,
+            remaining: r.remaining,
+            risk: r.level,
+            canFinish: r.canFinish
+          };
+        });
+
+        if (scrapDiff > 0) {
+          actionNoteLocal = 'Reduce purchase or delay purchase - near-expiry batches need to be consumed first';
+          suggestedQtyLocal = Math.max(0, Math.floor(weeklyUsage * Math.max(0, 2 - (simWithoutNew.stockoutWeek || 0))));
+        } else if (hasOldBatchRisk) {
+          actionNoteLocal = 'Prioritize older batch consumption, consider delaying purchase';
+        } else if (sim.stockoutWeek !== null && sim.stockoutWeek < 4) {
+          actionNoteLocal = 'Stock is tight, recommended to purchase soon';
+        } else {
+          actionNoteLocal = 'Normal procurement';
+        }
+
+        suggestion = {
+          suggestedPurchaseDate: typeof suggestedPurchaseDate === 'string' ? suggestedPurchaseDate : formatDate(suggestedPurchaseDate),
+          suggestedQty: suggestedQtyLocal,
+          coverageWeeks: typeof coverageWeeksLocal === 'string' ? coverageWeeksLocal : (coverageWeeksLocal.toFixed(1) + ' weeks'),
+          actionNote: actionNoteLocal,
+          oldBatchesToUse: oldBatchesToUseLocal
+        };
+
+        html += '<div class="purchase-plan">' +
+          '<h5>[+] Purchase Plan Draft</h5>' +
+          (effectivePrice > 0 ? '<div style="font-size:11px;color:var(--gray-500);margin-bottom:8px">New batch price: ¬•' + effectivePrice.toFixed(2) + '/unit (used in all value calculations)</div>' : '') +
+          '<div class="plan-grid">' +
+            '<div class="plan-item">' +
+              '<div class="plan-label">Suggested Purchase Date</div>' +
+              '<div class="plan-value">' + suggestion.suggestedPurchaseDate + '</div>' +
+            '</div>' +
+            '<div class="plan-item">' +
+              '<div class="plan-label">Suggested Qty</div>' +
+              '<div class="plan-value">' + suggestion.suggestedQty + ' ' + unit + '</div>' +
+            '</div>' +
+            '<div class="plan-item">' +
+              '<div class="plan-label">Est. Coverage</div>' +
+              '<div class="plan-value">' + suggestion.coverageWeeks + '</div>' +
+            '</div>' +
+            '<div class="plan-item">' +
+              '<div class="plan-label">Action Note</div>' +
+              '<div class="plan-value" style="font-size:12px">' + suggestion.actionNote + '</div>' +
+            '</div>' +
           '</div>';
-        }).join('') +
-      '</div>';
+
+        if (oldBatchesToUseLocal.length > 0) {
+          html += '<div class="plan-old-batches">' +
+            '<div class="plan-label" style="margin-bottom:8px">Older Batches to Handle First</div>' +
+            oldBatchesToUseLocal.map(function(b) {
+              var badgeColor = b.risk === 'high' ? 'danger' : (b.risk === 'medium' ? 'warning' : 'info');
+              var finishText = b.canFinish ? 'expected to finish' : '<span style="color:var(--danger)">WILL EXPIRE</span>';
+              return '<div class="old-batch-item">' +
+                '<span class="badge badge-' + badgeColor + '">' + b.batchNo + '</span> ' +
+                '<span style="color:var(--gray-500)">' + b.stock + ' ' + b.unit + ', ' + b.remaining + 'd left, ' + finishText + '</span>' +
+              '</div>';
+            }).join('') +
+          '</div>';
+        }
+
+        html += '<div style="margin-top:12px;display:flex;gap:8px">' +
+          '<button class="btn btn-primary" onclick="saveCurrentPurchasePlan()">[+] Save to Meeting Agenda</button>' +
+        '</div>';
+
+        html += '</div>';
+      } catch(ePlan) {
+        console.error('purchase plan error:', ePlan);
+        html += '<div class="purchase-plan" style="border-color:var(--warning);background:#fffbeb">' +
+          '<h5 style="color:var(--warning)">[!] Purchase plan draft unavailable (partial error)</h5>' +
+          '<div style="font-size:12px;color:var(--gray-600)">Core verification completed successfully. You may still save a basic plan.</div>' +
+          '<div style="margin-top:10px;display:flex;gap:8px">' +
+            '<button class="btn btn-primary" onclick="saveCurrentPurchasePlan()">[+] Save Basic Plan</button>' +
+          '</div>' +
+        '</div>';
+      }
     }
 
-    html += '<div style="margin-top:12px;display:flex;gap:8px">' +
-      '<button class="btn btn-primary" onclick="saveCurrentPurchasePlan()">[+] Save to Meeting Agenda</button>' +
+  } catch (e) {
+    console.error('runSimulation error:', e);
+    resultType = 'warn';
+    html = '<div class="verify-result warn">' +
+      '<h4>‚ö†Ô∏è Verification Partially Completed</h4>' +
+      '<div class="detail">' +
+        'Core check for <strong>"' + (name || 'selected material') + '"</strong> started.<br>' +
+        '<span style="color:var(--warning)">Some advanced analysis unavailable due to internal error:</span> ' + (e.message || 'unknown error') + '<br><br>' +
+        (totalExisting > 0 ? 'Current stock: <strong>' + totalExisting + ' ' + unit + '</strong><br>' : '') +
+        (qty > 0 ? 'Proposed purchase qty: <strong>' + qty + '</strong><br>' : '') +
+        '<br>Basic information captured. You can still save a plan to the meeting agenda for further discussion.' +
+      '</div>' +
+      (weeklyUsage > 0 && qty > 0 ?
+        '<div style="margin-top:12px"><button class="btn btn-primary btn-sm" onclick="saveCurrentPurchasePlan()">[+] Save Basic Plan</button></div>' : '') +
     '</div>';
-
-    html += '</div>';
-
-    lastSimulationSnapshot.suggestedPurchaseDate = typeof suggestedPurchaseDate === 'string' ? suggestedPurchaseDate : formatDate(suggestedPurchaseDate);
-    lastSimulationSnapshot.suggestedQty = suggestedQty;
-    lastSimulationSnapshot.coverageWeeks = typeof coverageWeeks === 'string' ? coverageWeeks : (coverageWeeks.toFixed(1) + ' weeks');
-    lastSimulationSnapshot.actionNote = actionNote;
-    lastSimulationSnapshot.oldBatchesToHandle = oldBatchesToUse;
   }
 
-  var newBatchPrice = parseFloat(document.getElementById('verifyPrice').value) || 0;
-  lastSimulationSnapshot.materialName = name;
-  lastSimulationSnapshot.qty = qty;
-  lastSimulationSnapshot.newBatchExpiry = newBatchExpiry;
-  lastSimulationSnapshot.newBatchPrice = newBatchPrice;
-  lastSimulationSnapshot.weeklyUsage = weeklyUsage;
-  lastSimulationSnapshot.resultType = resultType;
-  lastSimulationSnapshot.recommendationText = recommendationText || '';
-  lastSimulationSnapshot.simWithNew = {
-    totalScrappedValue: sim.totalScrappedValue,
-    totalScrappedQty: sim.totalScrappedQty,
-    stockoutWeek: sim.stockoutWeek,
-    stockoutDate: sim.stockoutDate
-  };
-  lastSimulationSnapshot.simWithoutNew = {
-    totalScrappedValue: simWithoutNew.totalScrappedValue,
-    totalScrappedQty: simWithoutNew.totalScrappedQty,
-    stockoutWeek: simWithoutNew.stockoutWeek,
-    stockoutDate: simWithoutNew.stockoutDate
-  };
+  try {
+    lastSimulationSnapshot = {
+      materialName: name,
+      qty: qty,
+      newBatchExpiry: newBatchExpiry,
+      newBatchPrice: effectivePrice,
+      weeklyUsage: weeklyUsage,
+      resultType: resultType,
+      recommendationText: recommendationText || '',
+      suggestedPurchaseDate: suggestion.suggestedPurchaseDate,
+      suggestedQty: suggestion.suggestedQty,
+      coverageWeeks: suggestion.coverageWeeks,
+      actionNote: suggestion.actionNote,
+      oldBatchesToHandle: suggestion.oldBatchesToUse || [],
+      simWithNew: {
+        totalScrappedValue: sim.totalScrappedValue || 0,
+        totalScrappedQty: sim.totalScrappedQty || 0,
+        stockoutWeek: sim.stockoutWeek,
+        stockoutDate: sim.stockoutDate
+      },
+      simWithoutNew: {
+        totalScrappedValue: simWithoutNew.totalScrappedValue || 0,
+        totalScrappedQty: simWithoutNew.totalScrappedQty || 0,
+        stockoutWeek: simWithoutNew.stockoutWeek,
+        stockoutDate: simWithoutNew.stockoutDate
+      }
+    };
+  } catch(eSnap) { console.error('snapshot error:', eSnap); }
 
-  document.getElementById('verifyResult').innerHTML = html;
+  try {
+    document.getElementById('verifyResult').innerHTML = html;
+  } catch(eWrite) { console.error('write result error:', eWrite); }
+
+  try {
+    renderPurchasePlansInVerify();
+  } catch(eList) { console.error('plans list error:', eList); }
 }
 
 function renderDataPage() {
