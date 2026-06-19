@@ -1,11 +1,13 @@
 
 var STORAGE_KEY_MATERIALS = 'dental_materials_v2';
 var STORAGE_KEY_USAGES = 'dental_usages_v2';
+var STORAGE_KEY_PLANS = 'dental_purchase_plans_v2';
 var editingMaterialId = null;
 var chartInstances = {};
 var csvImportType = 'material';
 var dashboardView = 'risk';
 var weeklySortBy = 'stockout';
+var lastSimulationSnapshot = null;
 
 function loadData(key) {
   try { return JSON.parse(localStorage.getItem(key)) || []; }
@@ -103,13 +105,88 @@ function getFIFOBatches(materialName) {
     .sort(function(a, b) { return new Date(a.expiryDate) - new Date(b.expiryDate); });
 }
 
+function calcFIFODepletion(materialName) {
+  var fifo = getFIFOBatches(materialName);
+  var weeklyAvg = getWeeklyAvg(materialName);
+  var cumStock = 0;
+  var result = [];
+
+  fifo.forEach(function(batch, idx) {
+    var startWeek = weeklyAvg > 0 ? cumStock / weeklyAvg : Infinity;
+    cumStock += batch.currentStock;
+    var depleteWeek = weeklyAvg > 0 ? cumStock / weeklyAvg : Infinity;
+    var weeksToExpiry = daysBetween(today(), batch.expiryDate) / 7;
+
+    var status, willScrapQty = 0, willScrapValue = 0, consumableQty = batch.currentStock;
+
+    if (weeklyAvg <= 0) {
+      status = weeksToExpiry <= 0 ? 'expired' : 'no_usage_data';
+      if (weeksToExpiry > 0 && weeksToExpiry < 104) willScrapQty = batch.currentStock;
+    } else if (weeksToExpiry <= startWeek) {
+      status = 'scrap_before_use';
+      willScrapQty = batch.currentStock;
+    } else if (weeksToExpiry < depleteWeek) {
+      status = 'partial_scrap';
+      var usedWeeks = weeksToExpiry - startWeek;
+      consumableQty = usedWeeks * weeklyAvg;
+      willScrapQty = batch.currentStock - consumableQty;
+    } else {
+      status = 'normal';
+    }
+
+    willScrapValue = willScrapQty * (batch.price || 0);
+    var finishDate = weeklyAvg > 0 ? addDays(today(), Math.ceil(depleteWeek * 7)) : null;
+
+    result.push({
+      batch: batch,
+      idx: idx,
+      fifoRank: idx + 1,
+      weeklyAvg: weeklyAvg,
+      startWeek: startWeek,
+      depleteWeek: depleteWeek,
+      weeksToExpiry: weeksToExpiry,
+      status: status,
+      consumableQty: Math.round(consumableQty * 100) / 100,
+      willScrapQty: Math.round(willScrapQty * 100) / 100,
+      willScrapValue: willScrapValue,
+      finishDate: finishDate
+    });
+  });
+
+  var totalDepleteWeek = weeklyAvg > 0 ? cumStock / weeklyAvg : null;
+  var totalScrapValue = result.reduce(function(s, r) { return s + r.willScrapValue; }, 0);
+  var totalScrapQty = result.reduce(function(s, r) { return s + r.willScrapQty; }, 0);
+
+  return {
+    batches: result,
+    rawFIFO: fifo,
+    weeklyAvg: weeklyAvg,
+    totalStock: cumStock,
+    totalDepleteWeek: totalDepleteWeek,
+    totalScrapQty: totalScrapQty,
+    totalScrapValue: totalScrapValue,
+    stockoutDate: totalDepleteWeek !== null ? addDays(today(), Math.ceil(totalDepleteWeek * 7)) : null
+  };
+}
+
 function assessBatchRisk(material) {
   var remaining = daysBetween(today(), material.expiryDate);
   var weeklyAvg = getWeeklyAvg(material.name);
-  var weeksToDeplete = weeklyAvg > 0 ? material.currentStock / weeklyAvg : Infinity;
-  var weeksToExpiry = remaining / 7;
-  var canFinish = weeksToDeplete <= weeksToExpiry;
+  var fifoInfo = calcFIFODepletion(material.name);
+  var batchInfo = fifoInfo.batches.find(function(b) { return b.batch.id === material.id; });
+
+  var weeksToDeplete, canFinish;
+  if (batchInfo) {
+    weeksToDeplete = batchInfo.depleteWeek;
+    canFinish = batchInfo.status === 'normal';
+  } else {
+    weeksToDeplete = weeklyAvg > 0 ? material.currentStock / weeklyAvg : Infinity;
+    var weeksToExpiry = remaining / 7;
+    canFinish = weeksToDeplete <= weeksToExpiry;
+  }
+
   var level, label, suggestion;
+  var scrapValue = batchInfo ? batchInfo.willScrapValue : (canFinish ? 0 : material.currentStock * (material.price || 0));
 
   if (remaining <= 0) {
     level = 'high'; label = 'Expired'; suggestion = 'Remove from stock immediately';
@@ -127,20 +204,28 @@ function assessBatchRisk(material) {
     remaining: remaining,
     weeklyAvg: weeklyAvg,
     weeksToDeplete: weeksToDeplete,
-    weeksToExpiry: weeksToExpiry,
     canFinish: canFinish,
     level: level,
     label: label,
-    suggestion: suggestion
+    suggestion: suggestion,
+    scrapValue: scrapValue,
+    fifoStatus: batchInfo ? batchInfo.status : null,
+    fifoStartWeek: batchInfo ? batchInfo.startWeek : null
   };
 }
 
-function simulateConsumption(materialName, weeklyUsage, newBatchQty, newBatchExpiry) {
+function simulateConsumption(materialName, weeklyUsage, newBatchQty, newBatchExpiry, newBatchPrice) {
   var batches = getFIFOBatches(materialName);
   var unit = batches.length > 0 ? batches[0].unit : 'pcs';
-  var price = batches.length > 0 ? (batches[0].price || 0) : 0;
+  var avgPrice = 0;
+  if (batches.length > 0) {
+    var totalPrice = batches.reduce(function(s, b) { return s + (b.price || 0); }, 0);
+    avgPrice = totalPrice / batches.length;
+  }
 
   if (newBatchQty > 0 && newBatchExpiry) {
+    var usePrice = (typeof newBatchPrice === 'number' && !isNaN(newBatchPrice) && newBatchPrice > 0)
+      ? newBatchPrice : avgPrice;
     batches.push({
       id: 'new',
       name: materialName,
@@ -148,7 +233,7 @@ function simulateConsumption(materialName, weeklyUsage, newBatchQty, newBatchExp
       currentStock: newBatchQty,
       unit: unit,
       expiryDate: newBatchExpiry,
-      price: price,
+      price: usePrice,
       isNew: true
     });
     batches.sort(function(a, b) { return new Date(a.expiryDate) - new Date(b.expiryDate); });
@@ -418,9 +503,9 @@ function renderRiskList() {
 
   riskItems.sort(function(a, b) { return a.risk.remaining - b.risk.remaining; });
 
-  var fifoMap = {};
+  var fifoCalcMap = {};
   riskItems.forEach(function(m) {
-    if (!fifoMap[m.name]) fifoMap[m.name] = getFIFOBatches(m.name);
+    if (!fifoCalcMap[m.name]) fifoCalcMap[m.name] = calcFIFODepletion(m.name);
   });
 
   var tbody = document.getElementById('riskTableBody');
@@ -431,15 +516,35 @@ function renderRiskList() {
 
   tbody.innerHTML = riskItems.map(function(m) {
     var r = m.risk;
-    var badgeClass = { high: 'badge-danger', medium: 'badge-warning', low: 'badge-success' }[r.level];
-    var barPct = Math.min(100, r.weeksToExpiry > 0 ? (r.weeksToDeplete / r.weeksToExpiry) * 100 : 100);
+    var fifoCalc = fifoCalcMap[m.name];
+    var bi = fifoCalc.batches.find(function(x) { return x.batch.id === m.id; });
+    var weeksToExpiry = r.remaining / 7;
+    var depleteVal = bi ? bi.depleteWeek : (r.weeksToDeplete || Infinity);
+    var barPct = Math.min(100, weeksToExpiry > 0 ? (depleteVal / weeksToExpiry) * 100 : 100);
     var barColor = r.canFinish ? 'var(--success)' : 'var(--danger)';
-    var finishLabel = r.weeklyAvg === 0 ? 'No usage data' : (r.canFinish ? 'OK - Finishable' : 'RISK - Will expire');
-    var remainingColor = r.remaining <= 30 ? 'var(--danger)' : (r.remaining <= 90 ? 'var(--warning)' : 'var(--gray-600)');
+    var badgeClass = { high: 'badge-danger', medium: 'badge-warning', low: 'badge-success' }[r.level];
 
-    var fifoList = fifoMap[m.name];
-    var fifoOrder = fifoList.findIndex(function(b) { return b.id === m.id; }) + 1;
-    var fifoLabel = fifoOrder > 0 ? ('#' + fifoOrder) : '-';
+    var finishLabel;
+    if (r.weeklyAvg === 0) {
+      finishLabel = 'No usage data';
+    } else if (!bi) {
+      finishLabel = r.canFinish ? 'OK - Finishable' : 'RISK - Will expire';
+    } else if (bi.status === 'normal') {
+      finishLabel = 'OK - Finishable';
+    } else if (bi.status === 'partial_scrap') {
+      finishLabel = '<span style="color:var(--warning)">Partial scrap: ' + bi.willScrapQty + ' ' + m.unit + ' (¥' + bi.willScrapValue.toFixed(0) + ')</span>';
+    } else if (bi.status === 'scrap_before_use') {
+      finishLabel = '<span style="color:var(--danger)">Full scrap ¥' + bi.willScrapValue.toFixed(0) + '</span>';
+    } else {
+      finishLabel = r.canFinish ? 'OK - Finishable' : 'RISK';
+    }
+
+    var remainingColor = r.remaining <= 30 ? 'var(--danger)' : (r.remaining <= 90 ? 'var(--warning)' : 'var(--gray-600)');
+    var fifoOrder = bi ? bi.fifoRank : '-';
+    var fifoNote = '';
+    if (bi && bi.startWeek > 0) {
+      fifoNote = '<div style="font-size:10px;color:var(--gray-400);margin-top:2px">Starts W' + bi.startWeek.toFixed(1) + '</div>';
+    }
 
     return '<tr>' +
       '<td><span class="badge ' + badgeClass + '">' + r.label + '</span></td>' +
@@ -449,9 +554,9 @@ function renderRiskList() {
       '<td>' + formatDate(m.expiryDate) + '</td>' +
       '<td style="font-weight:600;color:' + remainingColor + '">' + r.remaining + '�?/td>' +
       '<td>' + (r.weeklyAvg > 0 ? r.weeklyAvg.toFixed(1) : '-') + '</td>' +
-      '<td><div class="risk-bar"><div class="risk-bar-fill" style="width:' + Math.min(barPct, 100) + '%;background:' + barColor + '"></div></div> ' + (r.weeksToDeplete !== Infinity ? r.weeksToDeplete.toFixed(1) + 'w' : 'inf') + '</td>' +
+      '<td><div class="risk-bar"><div class="risk-bar-fill" style="width:' + Math.min(barPct, 100) + '%;background:' + barColor + '"></div></div> ' + (isFinite(depleteVal) ? depleteVal.toFixed(1) + 'w' : 'inf') + '</td>' +
       '<td style="font-weight:600">' + finishLabel + '</td>' +
-      '<td><span class="badge ' + (fifoOrder === 1 ? 'badge-info' : 'badge-success') + '">' + fifoLabel + '</span></td>' +
+      '<td><span class="badge ' + (fifoOrder === 1 ? 'badge-info' : 'badge-success') + '">#' + fifoOrder + '</span>' + fifoNote + '</td>' +
       '<td style="font-size:12px;color:var(--gray-600)">' + r.suggestion + '</td>' +
       '<td><button class="btn btn-outline btn-sm" onclick="showDetail(\'' + m.id + '\')">详情</button></td>' +
     '</tr>';
@@ -586,6 +691,7 @@ function getWeeklyMeetingData() {
   materials.forEach(function(m) {
     if (!materialSet[m.name]) { materialSet[m.name] = true; materialNames.push(m.name); }
   });
+  var planMap = getLatestPlanByMaterial();
 
   var items = materialNames.map(function(name) {
     var p = predict12Weeks(name);
@@ -594,12 +700,14 @@ function getWeeklyMeetingData() {
     var sim = simulateConsumption(name, p.weeklyUsage, 0, null);
     var fifo = getFIFOBatches(name);
     var totalStock = fifo.reduce(function(s, b) { return s + b.currentStock; }, 0);
+    var fifoCalc = calcFIFODepletion(name);
 
     var group, groupOrder;
     var hasNearExpiry = fifo.some(function(b) { return daysBetween(today(), b.expiryDate) <= 30; });
     var hasMidExpiry = fifo.some(function(b) { var d = daysBetween(today(), b.expiryDate); return d > 30 && d <= 90; });
     var stockoutWeek = p.stockoutInfo.week;
     var scrapValue = p.scrapInfo.totalValue;
+    var scrapQty = p.scrapInfo.totalQty;
 
     if (scrapValue > 0 && (stockoutWeek === null || stockoutWeek > 8)) {
       group = 'suspend';
@@ -630,12 +738,16 @@ function getWeeklyMeetingData() {
       weeklyUsage: p.weeklyUsage,
       stockoutWeek: stockoutWeek,
       stockoutDate: p.stockoutInfo.date,
-      scrapQty: p.scrapInfo.totalQty,
+      scrapQty: scrapQty,
       scrapValue: scrapValue,
       batches: fifo.length,
       hasNearExpiry: hasNearExpiry,
       hasMidExpiry: hasMidExpiry,
-      prediction: p
+      prediction: p,
+      fifoCalc: fifoCalc,
+      impactWeeks: stockoutWeek !== null ? Math.max(0, 12 - stockoutWeek) : 0,
+      recoverableValue: scrapValue,
+      plan: planMap[name] || null
     };
   }).filter(function(x) { return x !== null; });
 
@@ -655,7 +767,19 @@ function getWeeklyMeetingData() {
   });
 
   Object.keys(groups).forEach(function(key) {
-    groups[key].items.sort(function(a, b) {
+    var g = groups[key];
+    g.totalItems = g.items.length;
+    g.totalScrapValue = g.items.reduce(function(s, it) { return s + it.scrapValue; }, 0);
+    g.totalScrapQty = g.items.reduce(function(s, it) { return s + it.scrapQty; }, 0);
+    g.avgImpactWeeks = g.totalItems > 0
+      ? (g.items.reduce(function(s, it) { return s + it.impactWeeks; }, 0) / g.totalItems)
+      : 0;
+    g.stockoutIn4w = g.items.filter(function(it) { return it.stockoutWeek !== null && it.stockoutWeek < 4; }).length;
+    g.stockoutIn8w = g.items.filter(function(it) { return it.stockoutWeek !== null && it.stockoutWeek < 8; }).length;
+    g.pendingPlans = g.items.filter(function(it) { return it.plan && it.plan.status === 'pending'; }).length;
+    g.approvedPlans = g.items.filter(function(it) { return it.plan && it.plan.status === 'approved'; }).length;
+
+    g.items.sort(function(a, b) {
       if (weeklySortBy === 'stockout') {
         if (a.stockoutWeek !== null && b.stockoutWeek !== null) return a.stockoutWeek - b.stockoutWeek;
         if (a.stockoutWeek !== null && b.stockoutWeek === null) return -1;
@@ -677,6 +801,8 @@ function getWeeklyMeetingData() {
 function renderWeeklyMeeting() {
   var container = document.getElementById('weeklyMeetingContainer');
   var groups = getWeeklyMeetingData();
+  var statusColors = { pending: 'warning', approved: 'success', delayed: 'info', modified: 'primary', cancelled: 'danger' };
+  var statusLabels = { pending: 'Pending', approved: 'Approved', delayed: 'Delayed', modified: 'Modified', cancelled: 'Cancelled' };
 
   var groupColors = {
     suspend: 'danger',
@@ -700,32 +826,44 @@ function renderWeeklyMeeting() {
   var totalItems = 0;
   var totalScrapValue = 0;
   var stockoutCount = 0;
+  var pendingPlans = 0;
+  var approvedPlans = 0;
 
   Object.keys(groups).forEach(function(key) {
     var g = groups[key];
     totalItems += g.items.length;
+    pendingPlans += g.pendingPlans;
+    approvedPlans += g.approvedPlans;
     g.items.forEach(function(item) {
       totalScrapValue += item.scrapValue;
       if (item.stockoutWeek !== null && item.stockoutWeek < 12) stockoutCount++;
     });
   });
 
-  html += '<div class="weekly-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">' +
-    '<div class="stat-card" style="padding:14px;background:var(--danger-light);border-radius:8px">' +
-      '<div style="font-size:11px;color:var(--danger);text-transform:uppercase;letter-spacing:.5px">Total Scrap Risk</div>' +
-      '<div style="font-size:22px;font-weight:700;color:var(--danger)">¥' + totalScrapValue.toFixed(0) + '</div>' +
+  html += '<div class="weekly-stats" style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:20px">' +
+    '<div class="stat-card" style="padding:12px;background:var(--danger-light);border-radius:8px">' +
+      '<div style="font-size:10px;color:var(--danger);text-transform:uppercase;letter-spacing:.5px">Scrap Risk</div>' +
+      '<div style="font-size:20px;font-weight:700;color:var(--danger)">¥' + totalScrapValue.toFixed(0) + '</div>' +
     '</div>' +
-    '<div class="stat-card" style="padding:14px;background:var(--warning-light);border-radius:8px">' +
-      '<div style="font-size:11px;color:var(--warning);text-transform:uppercase;letter-spacing:.5px">Stockout in 12w</div>' +
-      '<div style="font-size:22px;font-weight:700;color:var(--warning)">' + stockoutCount + ' items</div>' +
+    '<div class="stat-card" style="padding:12px;background:var(--warning-light);border-radius:8px">' +
+      '<div style="font-size:10px;color:var(--warning);text-transform:uppercase;letter-spacing:.5px">Stockout 12w</div>' +
+      '<div style="font-size:20px;font-weight:700;color:var(--warning)">' + stockoutCount + '</div>' +
     '</div>' +
-    '<div class="stat-card" style="padding:14px;background:#e0e7ff;border-radius:8px">' +
-      '<div style="font-size:11px;color:#4f46e5;text-transform:uppercase;letter-spacing:.5px">Total Materials</div>' +
-      '<div style="font-size:22px;font-weight:700;color:#4f46e5">' + totalItems + '</div>' +
+    '<div class="stat-card" style="padding:12px;background:#fde68a;border-radius:8px">' +
+      '<div style="font-size:10px;color:#92400e;text-transform:uppercase;letter-spacing:.5px">Pending Plans</div>' +
+      '<div style="font-size:20px;font-weight:700;color:#92400e">' + pendingPlans + '</div>' +
     '</div>' +
-    '<div class="stat-card" style="padding:14px;background:#dcfce7;border-radius:8px">' +
-      '<div style="font-size:11px;color:#16a34a;text-transform:uppercase;letter-spacing:.5px">Action Groups</div>' +
-      '<div style="font-size:22px;font-weight:700;color:#16a34a">' + Object.keys(groups).filter(function(k){return groups[k].items.length>0;}).length + '</div>' +
+    '<div class="stat-card" style="padding:12px;background:#bbf7d0;border-radius:8px">' +
+      '<div style="font-size:10px;color:#166534;text-transform:uppercase;letter-spacing:.5px">Approved</div>' +
+      '<div style="font-size:20px;font-weight:700;color:#166534">' + approvedPlans + '</div>' +
+    '</div>' +
+    '<div class="stat-card" style="padding:12px;background:#e0e7ff;border-radius:8px">' +
+      '<div style="font-size:10px;color:#3730a3;text-transform:uppercase;letter-spacing:.5px">Materials</div>' +
+      '<div style="font-size:20px;font-weight:700;color:#3730a3">' + totalItems + '</div>' +
+    '</div>' +
+    '<div class="stat-card" style="padding:12px;background:#cffafe;border-radius:8px">' +
+      '<div style="font-size:10px;color:#155e75;text-transform:uppercase;letter-spacing:.5px">View Mode</div>' +
+      '<div style="font-size:16px;font-weight:700;color:#155e75">' + (weeklySortBy === 'stockout' ? 'Stockout 1st' : 'Scrap Value 1st') + '</div>' +
     '</div>' +
   '</div>';
 
@@ -735,45 +873,116 @@ function renderWeeklyMeeting() {
 
     var color = groupColors[key];
     var icon = groupIcons[key];
+    var summaryMetrics;
+    if (weeklySortBy === 'stockout') {
+      summaryMetrics = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;font-size:11px">' +
+        '<div style="padding:6px 8px;background:#fff;border-radius:4px;text-align:center">' +
+          '<div style="color:var(--gray-500)">Stockout <4w</div>' +
+          '<div style="font-size:15px;font-weight:700;color:var(--danger)">' + g.stockoutIn4w + '</div>' +
+        '</div>' +
+        '<div style="padding:6px 8px;background:#fff;border-radius:4px;text-align:center">' +
+          '<div style="color:var(--gray-500)">Stockout <8w</div>' +
+          '<div style="font-size:15px;font-weight:700;color:var(--warning)">' + g.stockoutIn8w + '</div>' +
+        '</div>' +
+        '<div style="padding:6px 8px;background:#fff;border-radius:4px;text-align:center">' +
+          '<div style="color:var(--gray-500)">Avg Impact Weeks</div>' +
+          '<div style="font-size:15px;font-weight:700;color:#4f46e5">' + g.avgImpactWeeks.toFixed(1) + 'w</div>' +
+        '</div>' +
+      '</div>';
+    } else {
+      summaryMetrics = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;font-size:11px">' +
+        '<div style="padding:6px 8px;background:#fff;border-radius:4px;text-align:center">' +
+          '<div style="color:var(--gray-500)">Scrap Amount</div>' +
+          '<div style="font-size:15px;font-weight:700;color:var(--danger)">¥' + g.totalScrapValue.toFixed(0) + '</div>' +
+        '</div>' +
+        '<div style="padding:6px 8px;background:#fff;border-radius:4px;text-align:center">' +
+          '<div style="color:var(--gray-500)">Scrap Qty</div>' +
+          '<div style="font-size:15px;font-weight:700;color:var(--warning)">' + g.totalScrapQty.toFixed(0) + '</div>' +
+        '</div>' +
+        '<div style="padding:6px 8px;background:#fff;border-radius:4px;text-align:center">' +
+          '<div style="color:var(--gray-500)">Recoverable</div>' +
+          '<div style="font-size:15px;font-weight:700;color:#16a34a">¥' + g.totalScrapValue.toFixed(0) + '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    var planBadges = '';
+    if (g.pendingPlans > 0) planBadges += '<span class="badge badge-warning" style="margin-left:8px">' + g.pendingPlans + ' pending</span>';
+    if (g.approvedPlans > 0) planBadges += '<span class="badge badge-success" style="margin-left:6px">' + g.approvedPlans + ' approved</span>';
 
     html += '<div class="weekly-group" style="margin-bottom:20px">' +
-      '<div class="group-header" style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--gray-50);border-radius:8px 8px 0 0;border:1px solid var(--gray-200);border-bottom:none">' +
-        '<span style="font-weight:700;font-size:14px;color:var(--gray-800)">' + icon + ' ' + g.title + '</span>' +
-        '<span class="badge badge-' + color + '" style="font-size:11px">' + g.items.length + ' items</span>' +
-        '<span style="font-size:12px;color:var(--gray-500);margin-left:8px">' + g.desc + '</span>' +
+      '<div class="group-header" style="padding:12px 14px;background:var(--gray-50);border-radius:8px 8px 0 0;border:1px solid var(--gray-200);border-bottom:none">' +
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">' +
+          '<span style="font-weight:700;font-size:14px;color:var(--gray-800)">' + icon + ' ' + g.title + '</span>' +
+          '<span class="badge badge-' + color + '" style="font-size:11px">' + g.items.length + ' items</span>' +
+          planBadges +
+          '<span style="font-size:12px;color:var(--gray-500);margin-left:auto">' + g.desc + '</span>' +
+        '</div>' +
+        summaryMetrics +
       '</div>' +
       '<div class="group-body" style="border:1px solid var(--gray-200);border-top:none;border-radius:0 0 8px 8px;overflow:hidden">' +
         '<table style="width:100%;border-collapse:collapse">' +
           '<thead>' +
             '<tr style="background:var(--gray-50)">' +
               '<th style="text-align:left;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Material</th>' +
-              '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Total Stock</th>' +
-              '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Weekly Usage</th>' +
-              '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Stockout</th>' +
-              '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Scrap Risk</th>' +
-              '<th style="text-align:center;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Batches</th>' +
+              (weeklySortBy === 'stockout'
+                ? '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Stockout Time</th>' +
+                  '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Impact (wks)</th>'
+                : '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Scrap Value</th>' +
+                  '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Scrap Qty</th>') +
+              '<th style="text-align:right;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Stock / Usage</th>' +
+              '<th style="text-align:center;padding:8px 12px;font-size:12px;font-weight:600;color:var(--gray-600)">Plan</th>' +
             '</tr>' +
           '</thead>' +
           '<tbody>';
 
     g.items.forEach(function(item, idx) {
-      var stockoutText = item.stockoutWeek !== null
-        ? ('W' + item.stockoutWeek + ' (' + formatDate(item.stockoutDate) + ')')
-        : '>12w';
-      var stockoutColor = item.stockoutWeek !== null && item.stockoutWeek < 4 ? 'var(--danger)'
-        : (item.stockoutWeek !== null && item.stockoutWeek < 8 ? 'var(--warning)' : 'var(--gray-500)');
-      var scrapText = item.scrapValue > 0
-        ? (item.scrapQty + ' ' + item.unit + ' / ¥' + item.scrapValue.toFixed(0))
-        : '-';
-      var scrapColor = item.scrapValue > 0 ? 'var(--danger)' : 'var(--gray-400)';
+      var planCell;
+      if (item.plan) {
+        var pc = statusColors[item.plan.status] || 'gray';
+        var pl = statusLabels[item.plan.status] || item.plan.status;
+        planCell = '<span class="badge badge-' + pc + '" style="cursor:pointer" onclick="event.stopPropagation();openPlanQuickModal(\'' + item.plan.id + '\')" title="Click to update">' + pl + '</span>';
+      } else {
+        planCell = '<span style="color:var(--gray-400);font-size:11px">n/a</span>';
+      }
+
+      var stockoutCell = '';
+      if (weeklySortBy === 'stockout') {
+        var stockoutText = item.stockoutWeek !== null
+          ? ('W' + item.stockoutWeek + '<br><span style="font-size:10px;color:var(--gray-500)">' + formatDate(item.stockoutDate) + '</span>')
+          : '<span style="color:var(--gray-400)">>12w</span>';
+        var stockoutColor = item.stockoutWeek !== null && item.stockoutWeek < 4 ? 'var(--danger)'
+          : (item.stockoutWeek !== null && item.stockoutWeek < 8 ? 'var(--warning)' : 'var(--gray-500)');
+        stockoutCell =
+          '<td style="padding:10px 12px;font-size:13px;text-align:right;font-weight:600;color:' + stockoutColor + '">' + stockoutText + '</td>' +
+          '<td style="padding:10px 12px;font-size:13px;text-align:right;font-weight:700">' +
+            (item.stockoutWeek !== null && item.stockoutWeek < 12
+              ? '<span style="color:var(--warning)">' + item.impactWeeks + 'w affected</span>'
+              : '<span style="color:var(--gray-400)">-</span>') +
+          '</td>';
+      } else {
+        var scrapText = item.scrapValue > 0
+          ? ('<span style="color:var(--danger);font-weight:700">¥' + item.scrapValue.toFixed(0) + '</span>')
+          : '<span style="color:var(--gray-400)">-</span>';
+        var scrapQty = item.scrapValue > 0
+          ? ('<span style="color:var(--warning)">' + item.scrapQty.toFixed(0) + ' ' + item.unit + '</span>')
+          : '<span style="color:var(--gray-400)">-</span>';
+        stockoutCell =
+          '<td style="padding:10px 12px;font-size:13px;text-align:right">' + scrapText + '</td>' +
+          '<td style="padding:10px 12px;font-size:13px;text-align:right">' + scrapQty + '</td>';
+      }
 
       html += '<tr style="border-top:1px solid var(--gray-100);cursor:pointer" onclick="showDetailByName(\'' + item.name + '\')">' +
-        '<td style="padding:10px 12px;font-size:13px;font-weight:500;color:var(--gray-800)">' + item.name + '</td>' +
-        '<td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--gray-700)">' + item.totalStock + ' ' + item.unit + '</td>' +
-        '<td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--gray-600)">' + item.weeklyUsage.toFixed(1) + '</td>' +
-        '<td style="padding:10px 12px;font-size:13px;text-align:right;font-weight:500;color:' + stockoutColor + '">' + stockoutText + '</td>' +
-        '<td style="padding:10px 12px;font-size:13px;text-align:right;font-weight:500;color:' + scrapColor + '">' + scrapText + '</td>' +
-        '<td style="padding:10px 12px;font-size:12px;text-align:center;color:var(--gray-500)">' + item.batches + '</td>' +
+        '<td style="padding:10px 12px;font-size:13px;font-weight:500;color:var(--gray-800)">' +
+          item.name +
+          (item.hasNearExpiry ? ' <span title="Has near-expiry batch" style="color:var(--danger);font-size:11px">[!]</span>' : '') +
+        '</td>' +
+        stockoutCell +
+        '<td style="padding:10px 12px;font-size:12px;text-align:right;color:var(--gray-600)">' +
+          item.totalStock + ' ' + item.unit + '<br>' +
+          '<span style="color:var(--gray-400)">' + item.weeklyUsage.toFixed(1) + '/wk</span>' +
+        '</td>' +
+        '<td style="padding:10px 12px;text-align:center">' + planCell + '</td>' +
       '</tr>';
     });
 
@@ -839,18 +1048,32 @@ function showDetail(id) {
 
   var allBatchesHtml = '';
   if (allBatches.length > 1) {
+    var fifoCalc = calcFIFODepletion(m.name);
     allBatchesHtml = '<div style="margin-top:16px"><h4 style="font-size:14px;font-weight:600;margin-bottom:10px">Other Batches (FIFO Order)</h4>' +
-      '<div class="usage-table"><table><thead><tr><th>Priority</th><th>Batch No.</th><th>Stock</th><th>Expiry</th><th>Days Left</th></tr></thead><tbody>' +
-      allBatches.map(function(b, idx) {
+      '<div class="usage-table"><table><thead><tr><th>Priority</th><th>Batch No.</th><th>Stock</th><th>Expiry</th><th>Days Left</th><th>Starts</th><th>Depletes</th></tr></thead><tbody>' +
+      fifoCalc.batches.map(function(bi, idx) {
+        var b = bi.batch;
         var badge = idx + 1 === fifoOrder ? '<span class="fifo-badge">Current</span>' : '';
         var days = daysBetween(today(), b.expiryDate);
         var col = days <= 30 ? 'var(--danger)' : (days <= 90 ? 'var(--warning)' : 'inherit');
+        var depleteText;
+        if (bi.status === 'normal') {
+          depleteText = (isFinite(bi.depleteWeek) ? 'W' + bi.depleteWeek.toFixed(1) : 'inf');
+        } else if (bi.status === 'partial_scrap') {
+          depleteText = '<span style="color:var(--warning)">partial</span>';
+        } else if (bi.status === 'scrap_before_use') {
+          depleteText = '<span style="color:var(--danger)">scrap</span>';
+        } else {
+          depleteText = bi.status;
+        }
         return '<tr' + (idx + 1 === fifoOrder ? ' style="background:var(--primary-light)"' : '') + '>' +
           '<td>#' + (idx + 1) + badge + '</td>' +
           '<td>' + b.batchNo + '</td>' +
           '<td>' + b.currentStock + ' ' + b.unit + '</td>' +
           '<td>' + formatDate(b.expiryDate) + '</td>' +
           '<td style="color:' + col + '">' + days + 'd</td>' +
+          '<td>W' + (isFinite(bi.startWeek) ? bi.startWeek.toFixed(1) : '-') + '</td>' +
+          '<td>' + depleteText + '</td>' +
         '</tr>';
       }).join('') +
       '</tbody></table></div></div>';
@@ -994,54 +1217,38 @@ function onVerifyMaterialChange() {
     return;
   }
 
-  var avg = getWeeklyAvg(name);
-  document.getElementById('verifyWeeklyUsage').value = avg > 0 ? avg.toFixed(1) : '';
+  var fifoCalc = calcFIFODepletion(name);
+  document.getElementById('verifyWeeklyUsage').value = fifoCalc.weeklyAvg > 0 ? fifoCalc.weeklyAvg.toFixed(1) : '';
 
-  var fifo = getFIFOBatches(name);
-  var cumStock = 0;
-  var batchRows = fifo.map(function(b, idx) {
+  document.getElementById('verifyStockBody').innerHTML = fifoCalc.batches.map(function(bi) {
+    var b = bi.batch;
     var remaining = daysBetween(today(), b.expiryDate);
     var remainingColor = remaining <= 30 ? 'var(--danger)' : (remaining <= 90 ? 'var(--warning)' : 'inherit');
-    var priority = idx === 0 ? '<span class="badge badge-info">#1</span>' : '<span class="badge badge-success">#' + (idx+1) + '</span>';
+    var priority = bi.idx === 0 ? '<span class="badge badge-info">#1</span>' : '<span class="badge badge-success">#' + bi.fifoRank + '</span>';
 
-    var weeksToDeplete, weeksToStart, depleteNote;
-    if (avg > 0) {
-      weeksToStart = cumStock / avg;
-      cumStock += b.currentStock;
-      weeksToDeplete = cumStock / avg;
-
-      var weeksToExpiry = remaining / 7;
-      if (weeksToExpiry < weeksToStart) {
-        depleteNote = '<span style="color:var(--danger)">expires before use</span>';
-      } else if (weeksToExpiry < weeksToDeplete) {
-        depleteNote = '<span style="color:var(--warning)">partial scrap</span>';
-      } else {
-        depleteNote = weeksToDeplete.toFixed(1) + 'w';
-      }
+    var depleteNote;
+    if (bi.status === 'normal') {
+      depleteNote = (isFinite(bi.depleteWeek) ? bi.depleteWeek.toFixed(1) + 'w' : 'inf');
+    } else if (bi.status === 'partial_scrap') {
+      depleteNote = '<span style="color:var(--warning)">partial scrap</span>';
+    } else if (bi.status === 'scrap_before_use') {
+      depleteNote = '<span style="color:var(--danger)">expires before use</span>';
+    } else if (bi.status === 'no_usage_data') {
+      depleteNote = '<span style="color:var(--gray-400)">no usage data</span>';
     } else {
-      weeksToStart = 0;
-      cumStock += b.currentStock;
-      weeksToDeplete = 'inf';
-      depleteNote = 'inf';
+      depleteNote = '<span style="color:var(--danger)">expired</span>';
     }
 
-    return {
-      html: '<tr>' +
-        '<td>' + priority + '</td>' +
-        '<td>' + b.batchNo + '</td>' +
-        '<td>' + b.currentStock + ' ' + b.unit + '</td>' +
-        '<td>' + formatDate(b.expiryDate) + '</td>' +
-        '<td style="color:' + remainingColor + '">' + remaining + 'd</td>' +
-        '<td>' + (avg > 0 ? avg.toFixed(1) : '-') + '</td>' +
-        '<td>' + depleteNote + '</td>' +
-      '</tr>',
-      batch: b,
-      weeksToStart: weeksToStart,
-      weeksToDeplete: weeksToDeplete
-    };
-  });
-
-  document.getElementById('verifyStockBody').innerHTML = batchRows.map(function(r) { return r.html; }).join('');
+    return '<tr>' +
+      '<td>' + priority + '</td>' +
+      '<td>' + b.batchNo + '</td>' +
+      '<td>' + b.currentStock + ' ' + b.unit + '</td>' +
+      '<td>' + formatDate(b.expiryDate) + '</td>' +
+      '<td style="color:' + remainingColor + '">' + remaining + 'd</td>' +
+      '<td>' + (fifoCalc.weeklyAvg > 0 ? fifoCalc.weeklyAvg.toFixed(1) : '-') + '</td>' +
+      '<td>' + depleteNote + '</td>' +
+    '</tr>';
+  }).join('');
 
   runSimulation();
 }
@@ -1184,6 +1391,34 @@ function runSimulation() {
     '</div>';
   }
 
+  var newBatchPrice = parseFloat(document.getElementById('verifyPrice').value) || 0;
+  lastSimulationSnapshot = {
+    materialName: name,
+    qty: qty,
+    newBatchExpiry: newBatchExpiry,
+    newBatchPrice: newBatchPrice,
+    weeklyUsage: weeklyUsage,
+    resultType: resultType,
+    recommendationText: recommendationText || '',
+    suggestedPurchaseDate: null,
+    suggestedQty: qty || 0,
+    coverageWeeks: null,
+    actionNote: '',
+    oldBatchesToHandle: [],
+    simWithNew: {
+      totalScrappedValue: sim.totalScrappedValue,
+      totalScrappedQty: sim.totalScrappedQty,
+      stockoutWeek: sim.stockoutWeek,
+      stockoutDate: sim.stockoutDate
+    },
+    simWithoutNew: {
+      totalScrappedValue: simWithoutNew.totalScrappedValue,
+      totalScrappedQty: simWithoutNew.totalScrappedQty,
+      stockoutWeek: simWithoutNew.stockoutWeek,
+      stockoutDate: simWithoutNew.stockoutDate
+    }
+  };
+
   if (weeklyUsage > 0) {
     var suggestedPurchaseDate, suggestedQty, coverageWeeks, actionNote;
     var totalExisting = fifo.reduce(function(s, b) { return s + b.currentStock; }, 0);
@@ -1260,8 +1495,39 @@ function runSimulation() {
       '</div>';
     }
 
+    html += '<div style="margin-top:12px;display:flex;gap:8px">' +
+      '<button class="btn btn-primary" onclick="saveCurrentPurchasePlan()">[+] Save to Meeting Agenda</button>' +
+    '</div>';
+
     html += '</div>';
+
+    lastSimulationSnapshot.suggestedPurchaseDate = typeof suggestedPurchaseDate === 'string' ? suggestedPurchaseDate : formatDate(suggestedPurchaseDate);
+    lastSimulationSnapshot.suggestedQty = suggestedQty;
+    lastSimulationSnapshot.coverageWeeks = typeof coverageWeeks === 'string' ? coverageWeeks : (coverageWeeks.toFixed(1) + ' weeks');
+    lastSimulationSnapshot.actionNote = actionNote;
+    lastSimulationSnapshot.oldBatchesToHandle = oldBatchesToUse;
   }
+
+  var newBatchPrice = parseFloat(document.getElementById('verifyPrice').value) || 0;
+  lastSimulationSnapshot.materialName = name;
+  lastSimulationSnapshot.qty = qty;
+  lastSimulationSnapshot.newBatchExpiry = newBatchExpiry;
+  lastSimulationSnapshot.newBatchPrice = newBatchPrice;
+  lastSimulationSnapshot.weeklyUsage = weeklyUsage;
+  lastSimulationSnapshot.resultType = resultType;
+  lastSimulationSnapshot.recommendationText = recommendationText || '';
+  lastSimulationSnapshot.simWithNew = {
+    totalScrappedValue: sim.totalScrappedValue,
+    totalScrappedQty: sim.totalScrappedQty,
+    stockoutWeek: sim.stockoutWeek,
+    stockoutDate: sim.stockoutDate
+  };
+  lastSimulationSnapshot.simWithoutNew = {
+    totalScrappedValue: simWithoutNew.totalScrappedValue,
+    totalScrappedQty: simWithoutNew.totalScrappedQty,
+    stockoutWeek: simWithoutNew.stockoutWeek,
+    stockoutDate: simWithoutNew.stockoutDate
+  };
 
   document.getElementById('verifyResult').innerHTML = html;
 }
@@ -1581,12 +1847,146 @@ function showToast(msg, type) {
   setTimeout(function() { div.remove(); }, 3500);
 }
 
+function saveCurrentPurchasePlan() {
+  if (!lastSimulationSnapshot) { showToast('Please run simulation first', 'warn'); return; }
+  var s = lastSimulationSnapshot;
+  var plan = {
+    id: genId(),
+    createdAt: new Date().toISOString(),
+    materialName: s.materialName,
+    verifyInput: {
+      qty: s.qty,
+      newBatchExpiry: s.newBatchExpiry,
+      newBatchPrice: s.newBatchPrice
+    },
+    suggestedPurchaseDate: s.suggestedPurchaseDate,
+    suggestedQty: s.suggestedQty,
+    coverageWeeks: s.coverageWeeks,
+    actionNote: s.actionNote,
+    oldBatchesToHandle: s.oldBatchesToHandle,
+    resultType: s.resultType,
+    recommendationText: s.recommendationText,
+    simulation: {
+      simWithNew: {
+        totalScrappedValue: s.simWithNew.totalScrappedValue,
+        totalScrappedQty: s.simWithNew.totalScrappedQty,
+        stockoutWeek: s.simWithNew.stockoutWeek,
+        stockoutDate: s.simWithNew.stockoutDate
+      },
+      simWithoutNew: {
+        totalScrappedValue: s.simWithoutNew.totalScrappedValue,
+        totalScrappedQty: s.simWithoutNew.totalScrappedQty,
+        stockoutWeek: s.simWithoutNew.stockoutWeek,
+        stockoutDate: s.simWithoutNew.stockoutDate
+      }
+    },
+    status: 'pending',
+    discussionNote: '',
+    finalQty: null
+  };
+  var plans = loadData(STORAGE_KEY_PLANS);
+  plans.unshift(plan);
+  saveData(STORAGE_KEY_PLANS, plans);
+  showToast('Saved to Weekly Meeting agenda', 'success');
+  renderPurchasePlansInVerify(plan.id);
+}
+
+function getLatestPlanByMaterial() {
+  var plans = loadData(STORAGE_KEY_PLANS);
+  var map = {};
+  plans.forEach(function(p) {
+    if (!map[p.materialName]) map[p.materialName] = p;
+  });
+  return map;
+}
+
+function updatePlanStatus(planId, status, finalQty, note) {
+  var plans = loadData(STORAGE_KEY_PLANS);
+  var idx = plans.findIndex(function(p) { return p.id === planId; });
+  if (idx < 0) return;
+  plans[idx].status = status;
+  plans[idx].discussionNote = note || plans[idx].discussionNote;
+  if (typeof finalQty === 'number' && !isNaN(finalQty)) plans[idx].finalQty = finalQty;
+  plans[idx].updatedAt = new Date().toISOString();
+  saveData(STORAGE_KEY_PLANS, plans);
+  showToast('Plan status updated: ' + status, 'success');
+  refreshAll();
+}
+
+function openPlanQuickModal(planId) {
+  var plans = loadData(STORAGE_KEY_PLANS);
+  var plan = plans.find(function(p) { return p.id === planId; });
+  if (!plan) return;
+  var html = '<div id="planQuickModal" class="modal-overlay" onclick="if(event.target===this)this.remove()">' +
+    '<div class="modal modal-sm">' +
+      '<div class="modal-header">' +
+        '<h3>Plan Status - ' + plan.materialName + '</h3>' +
+        '<button class="close-btn" onclick="document.getElementById(\'planQuickModal\').remove()">x</button>' +
+      '</div>' +
+      '<div class="modal-body">' +
+        '<div style="margin-bottom:12px;padding:10px;background:var(--gray-50);border-radius:6px;font-size:12px">' +
+          '<div><strong>Created:</strong> ' + plan.createdAt.substr(0, 16).replace('T', ' ') + '</div>' +
+          '<div><strong>Suggested:</strong> ' + plan.suggestedQty + ' pcs, buy ' + (typeof plan.suggestedPurchaseDate === 'string' ? plan.suggestedPurchaseDate : formatDate(plan.suggestedPurchaseDate)) + '</div>' +
+          '<div><strong>Note:</strong> ' + plan.actionNote + '</div>' +
+        '</div>' +
+        '<div class="form-group"><label>Final Qty</label>' +
+          '<input id="planFinalQty" type="number" value="' + (plan.finalQty !== null ? plan.finalQty : plan.suggestedQty) + '">' +
+        '</div>' +
+        '<div class="form-group"><label>Discussion Note</label>' +
+          '<textarea id="planNote" rows="2">' + (plan.discussionNote || '') + '</textarea>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px">' +
+          '<button class="btn btn-success" onclick="quickUpdatePlan(\'' + planId + '\',\'approved\')">Approve</button>' +
+          '<button class="btn btn-outline" onclick="quickUpdatePlan(\'' + planId + '\',\'delayed\')">Delay</button>' +
+          '<button class="btn btn-warning" onclick="quickUpdatePlan(\'' + planId + '\',\'modified\')">Modify</button>' +
+          '<button class="btn btn-outline" onclick="quickUpdatePlan(\'' + planId + '\',\'cancelled\')">Cancel</button>' +
+        '</div>' +
+      '</div>' +
+    '</div></div>';
+  var div = document.createElement('div');
+  div.innerHTML = html;
+  document.body.appendChild(div.firstElementChild);
+}
+
+function quickUpdatePlan(planId, status) {
+  var qty = parseFloat(document.getElementById('planFinalQty').value);
+  var note = document.getElementById('planNote').value;
+  updatePlanStatus(planId, status, isNaN(qty) ? null : qty, note);
+  var m = document.getElementById('planQuickModal');
+  if (m) m.remove();
+}
+
+function renderPurchasePlansInVerify(highlightId) {
+  var plans = loadData(STORAGE_KEY_PLANS).slice(0, 5);
+  var container = document.getElementById('verifyPlansList');
+  if (!container) return;
+  if (plans.length === 0) { container.innerHTML = ''; return; }
+  var statusColors = { pending: 'warning', approved: 'success', delayed: 'info', modified: 'primary', cancelled: 'danger' };
+  var statusLabels = { pending: 'Pending', approved: 'Approved', delayed: 'Delayed', modified: 'Modified', cancelled: 'Cancelled' };
+  container.innerHTML = '<h5 style="font-size:13px;margin:16px 0 8px;font-weight:600;color:var(--gray-700)">[=] Recent Purchase Plans</h5>' +
+    plans.map(function(p) {
+      var color = statusColors[p.status] || 'gray';
+      var label = statusLabels[p.status] || p.status;
+      var hl = highlightId === p.id ? 'style="border:2px solid var(--primary);background:#eef2ff"' : '';
+      return '<div class="plan-item-row" ' + hl + ' onclick="openPlanQuickModal(\'' + p.id + '\')" style="cursor:pointer;padding:8px 10px;border:1px solid var(--gray-200);border-radius:6px;margin-bottom:6px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center">' +
+          '<span style="font-weight:600;font-size:12px">' + p.materialName + '</span>' +
+          '<span class="badge badge-' + color + '">' + label + '</span>' +
+        '</div>' +
+        '<div style="font-size:11px;color:var(--gray-500);margin-top:2px">' +
+          p.suggestedQty + ' pcs | created ' + p.createdAt.substr(5, 11).replace('T', ' ') +
+          (p.finalQty !== null ? ' | final: ' + p.finalQty : '') +
+        '</div>' +
+      '</div>';
+    }).join('');
+}
+
 function refreshAll() {
   renderCategoryFilter();
   var activePage = document.querySelector('.page.active');
   if (activePage) {
     if (activePage.id === 'page-dashboard') renderDashboard();
-    else if (activePage.id === 'page-verify') renderVerify();
+    else if (activePage.id === 'page-verify') { renderVerify(); renderPurchasePlansInVerify(); }
     else if (activePage.id === 'page-data') renderDataPage();
   }
 }
