@@ -1,0 +1,1190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>齿科智采 — 口腔诊所效期分析工具</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --sidebar-w:220px;
+  --primary:#2563eb;
+  --primary-light:#dbeafe;
+  --danger:#ef4444;
+  --danger-light:#fee2e2;
+  --warning:#f59e0b;
+  --warning-light:#fef3c7;
+  --success:#10b981;
+  --success-light:#d1fae5;
+  --gray-50:#f9fafb;
+  --gray-100:#f3f4f6;
+  --gray-200:#e5e7eb;
+  --gray-300:#d1d5db;
+  --gray-400:#9ca3af;
+  --gray-500:#6b7280;
+  --gray-600:#4b5563;
+  --gray-700:#374151;
+  --gray-800:#1f2937;
+  --gray-900:#111827;
+  --radius:8px;
+  --shadow:0 1px 3px rgba(0,0,0,.1),0 1px 2px rgba(0,0,0,.06);
+  --shadow-md:0 4px 6px rgba(0,0,0,.07),0 2px 4px rgba(0,0,0,.06);
+}
+html,body{height:100%;font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:var(--gray-50);color:var(--gray-800);font-size:14px}
+.app{display:flex;height:100vh;overflow:hidden}
+.sidebar{width:var(--sidebar-w);background:var(--gray-900);color:#fff;display:flex;flex-direction:column;flex-shrink:0}
+.sidebar-logo{padding:20px 16px;font-size:18px;font-weight:700;border-bottom:1px solid rgba(255,255,255,.1);display:flex;align-items:center;gap:8px}
+.sidebar-logo svg{width:28px;height:28px;fill:var(--primary)}
+.nav{flex:1;padding:12px 0}
+.nav-item{display:flex;align-items:center;gap:10px;padding:11px 20px;cursor:pointer;color:rgba(255,255,255,.65);transition:all .2s;font-size:14px;border-left:3px solid transparent}
+.nav-item:hover{background:rgba(255,255,255,.06);color:#fff}
+.nav-item.active{background:rgba(37,99,235,.2);color:#fff;border-left-color:var(--primary)}
+.nav-item svg{width:18px;height:18px;flex-shrink:0}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.topbar{height:52px;background:#fff;border-bottom:1px solid var(--gray-200);display:flex;align-items:center;justify-content:space-between;padding:0 24px;flex-shrink:0}
+.topbar-title{font-size:16px;font-weight:600;color:var(--gray-800)}
+.topbar-actions{display:flex;gap:8px}
+.content{flex:1;overflow-y:auto;padding:20px 24px}
+.page{display:none}
+.page.active{display:block}
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
+.stat-card{background:#fff;border-radius:var(--radius);padding:20px;box-shadow:var(--shadow)}
+.stat-card .label{font-size:13px;color:var(--gray-500);margin-bottom:6px}
+.stat-card .value{font-size:28px;font-weight:700;color:var(--gray-900)}
+.stat-card .sub{font-size:12px;color:var(--gray-400);margin-top:4px}
+.stat-card.danger .value{color:var(--danger)}
+.stat-card.warning .value{color:var(--warning)}
+.stat-card.success .value{color:var(--success)}
+.card{background:#fff;border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:20px;overflow:hidden}
+.card-header{padding:16px 20px;border-bottom:1px solid var(--gray-100);display:flex;align-items:center;justify-content:space-between}
+.card-header h3{font-size:15px;font-weight:600}
+.card-body{padding:20px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 16px;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;border:1px solid transparent;transition:all .15s}
+.btn-primary{background:var(--primary);color:#fff}
+.btn-primary:hover{background:#1d4ed8}
+.btn-outline{background:#fff;color:var(--gray-700);border-color:var(--gray-300)}
+.btn-outline:hover{background:var(--gray-50);border-color:var(--gray-400)}
+.btn-danger{background:var(--danger);color:#fff}
+.btn-danger:hover{background:#dc2626}
+.btn-sm{padding:4px 10px;font-size:12px}
+table{width:100%;border-collapse:collapse}
+table th,table td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--gray-100);font-size:13px}
+table th{background:var(--gray-50);font-weight:600;color:var(--gray-600);white-space:nowrap}
+table tr:hover{background:var(--gray-50)}
+.badge{display:inline-flex;align-items:center;padding:2px 10px;border-radius:99px;font-size:12px;font-weight:500}
+.badge-danger{background:var(--danger-light);color:var(--danger)}
+.badge-warning{background:var(--warning-light);color:#92400e}
+.badge-success{background:var(--success-light);color:#065f46}
+.badge-info{background:var(--primary-light);color:var(--primary)}
+.risk-bar{height:6px;border-radius:3px;background:var(--gray-200);width:120px;display:inline-block;vertical-align:middle;position:relative;overflow:hidden}
+.risk-bar-fill{height:100%;border-radius:3px;position:absolute;top:0;left:0;transition:width .3s}
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:100;display:none;align-items:center;justify-content:center}
+.modal-overlay.show{display:flex}
+.modal{background:#fff;border-radius:12px;width:680px;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.15)}
+.modal-header{padding:18px 24px;border-bottom:1px solid var(--gray-100);display:flex;align-items:center;justify-content:space-between}
+.modal-header h3{font-size:16px;font-weight:600}
+.modal-close{width:32px;height:32px;border-radius:6px;border:none;background:transparent;cursor:pointer;font-size:18px;color:var(--gray-500);display:flex;align-items:center;justify-content:center}
+.modal-close:hover{background:var(--gray-100)}
+.modal-body{padding:24px}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.form-group{display:flex;flex-direction:column;gap:4px}
+.form-group.full{grid-column:1/-1}
+.form-group label{font-size:13px;font-weight:500;color:var(--gray-600)}
+.form-group input,.form-group select,.form-group textarea{padding:8px 12px;border:1px solid var(--gray-300);border-radius:6px;font-size:13px;outline:none;transition:border-color .15s}
+.form-group input:focus,.form-group select:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+.modal-footer{padding:14px 24px;border-top:1px solid var(--gray-100);display:flex;justify-content:flex-end;gap:8px}
+.charts-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+.chart-box{background:#fff;border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 20px}
+.chart-box h4{font-size:14px;font-weight:600;margin-bottom:12px;color:var(--gray-700)}
+.action-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:16px}
+.action-card{border:1px solid var(--gray-200);border-radius:var(--radius);padding:14px;cursor:default;transition:all .15s}
+.action-card:hover{border-color:var(--primary);box-shadow:var(--shadow-md)}
+.action-card .action-icon{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:18px;margin-bottom:8px}
+.action-card .action-title{font-weight:600;font-size:13px;margin-bottom:4px}
+.action-card .action-desc{font-size:12px;color:var(--gray-500)}
+.verify-result{margin-top:20px;padding:20px;border-radius:var(--radius);border:2px solid}
+.verify-result.pass{border-color:var(--success);background:var(--success-light)}
+.verify-result.warn{border-color:var(--warning);background:var(--warning-light)}
+.verify-result.block{border-color:var(--danger);background:var(--danger-light)}
+.verify-result h4{font-size:15px;font-weight:700;margin-bottom:8px}
+.verify-result .detail{font-size:13px;line-height:1.8}
+.empty-state{text-align:center;padding:48px 20px;color:var(--gray-400)}
+.usage-table{margin-top:16px}
+.usage-table table th{background:var(--gray-50)}
+.toast{position:fixed;top:20px;right:20px;padding:12px 20px;border-radius:var(--radius);color:#fff;font-size:13px;z-index:200;animation:slideIn .3s;box-shadow:var(--shadow-md)}
+.toast.success{background:var(--success)}
+.toast.error{background:var(--danger)}
+.toast.info{background:var(--primary)}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+.filter-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.filter-bar select,.filter-bar input{padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;font-size:13px;outline:none}
+.filter-bar select:focus,.filter-bar input:focus{border-color:var(--primary)}
+.material-link{color:var(--primary);cursor:pointer;text-decoration:none}
+.material-link:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+      齿科智采
+    </div>
+    <nav class="nav">
+      <div class="nav-item active" data-page="dashboard" onclick="switchPage('dashboard')">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
+        风险看板
+      </div>
+      <div class="nav-item" data-page="verify" onclick="switchPage('verify')">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
+        采购前核验
+      </div>
+      <div class="nav-item" data-page="data" onclick="switchPage('data')">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+        数据管理
+      </div>
+    </nav>
+    <div style="padding:16px;font-size:11px;color:rgba(255,255,255,.3);border-top:1px solid rgba(255,255,255,.1)">
+      v1.0 · 口腔诊所效期分析
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-title" id="pageTitle">风险看板</div>
+      <div class="topbar-actions">
+        <button class="btn btn-outline btn-sm" onclick="exportData()">导出数据</button>
+        <button class="btn btn-primary btn-sm" onclick="openAddMaterial()">+ 添加材料</button>
+      </div>
+    </header>
+
+    <div class="content">
+      <div class="page active" id="page-dashboard">
+        <div class="stats-row" id="statsRow"></div>
+        <div class="card">
+          <div class="card-header">
+            <h3>效期风险清单</h3>
+            <div class="filter-bar">
+              <select id="filterRisk" onchange="renderDashboard()">
+                <option value="all">全部风险</option>
+                <option value="high">高风险</option>
+                <option value="medium">中风险</option>
+                <option value="low">低风险</option>
+              </select>
+              <select id="filterCategory" onchange="renderDashboard()">
+                <option value="all">全部分类</option>
+              </select>
+              <input type="text" id="filterSearch" placeholder="搜索材料名称…" oninput="renderDashboard()">
+            </div>
+          </div>
+          <div class="card-body" style="padding:0">
+            <table id="riskTable">
+              <thead>
+                <tr>
+                  <th>风险</th>
+                  <th>材料名称</th>
+                  <th>分类</th>
+                  <th>当前库存</th>
+                  <th>批次号</th>
+                  <th>到期日期</th>
+                  <th>剩余天数</th>
+                  <th>周均消耗</th>
+                  <th>预计用完</th>
+                  <th>能否用完</th>
+                  <th>建议</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="riskTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="page" id="page-detail">
+        <div style="display:inline-flex;align-items:center;gap:4px;color:var(--primary);cursor:pointer;font-size:13px;margin-bottom:12px" onclick="switchPage('dashboard')">
+          ← 返回风险看板
+        </div>
+        <div id="detailContent"></div>
+      </div>
+
+      <div class="page" id="page-verify">
+        <div class="card">
+          <div class="card-header"><h3>采购前核验</h3></div>
+          <div class="card-body">
+            <p style="color:var(--gray-500);margin-bottom:20px;font-size:13px">输入拟采购的材料、数量和批次效期，系统将分析是否会与现有库存形成积压。</p>
+            <div class="form-grid">
+              <div class="form-group">
+                <label>选择材料</label>
+                <select id="verifyMaterial" onchange="onVerifyMaterialChange()">
+                  <option value="">请选择…</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>拟采购数量</label>
+                <input type="number" id="verifyQty" min="1" placeholder="输入数量" oninput="runVerify()">
+              </div>
+              <div class="form-group">
+                <label>新批次效期</label>
+                <input type="date" id="verifyExpiry" onchange="runVerify()">
+              </div>
+              <div class="form-group">
+                <label>预计每周消耗</label>
+                <input type="number" id="verifyWeeklyUsage" min="0" step="0.1" placeholder="可手动调整" oninput="runVerify()">
+              </div>
+            </div>
+            <div id="verifyResult"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h3>当前库存概览</h3></div>
+          <div class="card-body" style="padding:0">
+            <table>
+              <thead>
+                <tr><th>材料</th><th>批次号</th><th>库存量</th><th>到期日期</th><th>剩余天数</th><th>周均消耗</th><th>预计用完周数</th></tr>
+              </thead>
+              <tbody id="verifyStockBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="page" id="page-data">
+        <div class="card">
+          <div class="card-header">
+            <h3>材料库存数据</h3>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-outline btn-sm" onclick="importCSV()">导入CSV</button>
+              <button class="btn btn-primary btn-sm" onclick="openAddMaterial()">+ 添加材料</button>
+            </div>
+          </div>
+          <div class="card-body" style="padding:0">
+            <table>
+              <thead>
+                <tr><th>材料名称</th><th>分类</th><th>批次号</th><th>当前库存</th><th>单位</th><th>到期日期</th><th>单价(元)</th><th>操作</th></tr>
+              </thead>
+              <tbody id="materialTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <h3>领用记录</h3>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-outline btn-sm" onclick="importUsageCSV()">导入领用CSV</button>
+              <button class="btn btn-primary btn-sm" onclick="openAddUsage()">+ 添加领用</button>
+            </div>
+          </div>
+          <div class="card-body" style="padding:0">
+            <table>
+              <thead>
+                <tr><th>日期</th><th>材料</th><th>数量</th><th>医生</th><th>科室</th><th>治疗项目</th><th>操作</th></tr>
+              </thead>
+              <tbody id="usageTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="materialModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="materialModalTitle">添加材料</h3>
+      <button class="modal-close" onclick="closeModal('materialModal')">&#10005;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>材料名称 *</label>
+          <input type="text" id="matName" placeholder="如：窝沟封闭剂">
+        </div>
+        <div class="form-group">
+          <label>分类 *</label>
+          <select id="matCategory">
+            <option value="充填材料">充填材料</option>
+            <option value="印模材料">印模材料</option>
+            <option value="粘接材料">粘接材料</option>
+            <option value="预防保健材料">预防保健材料</option>
+            <option value="根管治疗材料">根管治疗材料</option>
+            <option value="修复材料">修复材料</option>
+            <option value="正畸材料">正畸材料</option>
+            <option value="外科材料">外科材料</option>
+            <option value="消毒材料">消毒材料</option>
+            <option value="其他">其他</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>批次号 *</label>
+          <input type="text" id="matBatch" placeholder="如：BN20250301">
+        </div>
+        <div class="form-group">
+          <label>当前库存 *</label>
+          <input type="number" id="matStock" min="0" step="1" placeholder="数量">
+        </div>
+        <div class="form-group">
+          <label>单位</label>
+          <select id="matUnit">
+            <option value="支">支</option>
+            <option value="套">套</option>
+            <option value="瓶">瓶</option>
+            <option value="盒">盒</option>
+            <option value="包">包</option>
+            <option value="罐">罐</option>
+            <option value="个">个</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>到期日期 *</label>
+          <input type="date" id="matExpiry">
+        </div>
+        <div class="form-group">
+          <label>单价(元)</label>
+          <input type="number" id="matPrice" min="0" step="0.01" placeholder="0.00">
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('materialModal')">取消</button>
+      <button class="btn btn-primary" onclick="saveMaterial()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="usageModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>添加领用记录</h3>
+      <button class="modal-close" onclick="closeModal('usageModal')">&#10005;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>日期 *</label>
+          <input type="date" id="usageDate">
+        </div>
+        <div class="form-group">
+          <label>材料 *</label>
+          <select id="usageMaterial"></select>
+        </div>
+        <div class="form-group">
+          <label>领用数量 *</label>
+          <input type="number" id="usageQty" min="1" step="1" placeholder="数量">
+        </div>
+        <div class="form-group">
+          <label>医生</label>
+          <select id="usageDoctor">
+            <option value="张伟明">张伟明</option>
+            <option value="李芳">李芳</option>
+            <option value="王建国">王建国</option>
+            <option value="陈静">陈静</option>
+            <option value="刘洋">刘洋</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>科室</label>
+          <select id="usageDept">
+            <option value="全科">全科</option>
+            <option value="正畸科">正畸科</option>
+            <option value="修复科">修复科</option>
+            <option value="儿童口腔科">儿童口腔科</option>
+            <option value="牙周科">牙周科</option>
+            <option value="外科">外科</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>治疗项目</label>
+          <select id="usageTreatment">
+            <option value="窝沟封闭">窝沟封闭</option>
+            <option value="树脂充填">树脂充填</option>
+            <option value="根管治疗">根管治疗</option>
+            <option value="固定修复">固定修复</option>
+            <option value="活动修复">活动修复</option>
+            <option value="正畸粘接">正畸粘接</option>
+            <option value="拔牙">拔牙</option>
+            <option value="洁治">洁治</option>
+            <option value="种植">种植</option>
+            <option value="其他">其他</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('usageModal')">取消</button>
+      <button class="btn btn-primary" onclick="saveUsage()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="detailModal">
+  <div class="modal" style="width:860px">
+    <div class="modal-header">
+      <h3 id="detailModalTitle">材料详情</h3>
+      <button class="modal-close" onclick="closeModal('detailModal')">&#10005;</button>
+    </div>
+    <div class="modal-body" id="detailModalBody"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="csvModal">
+  <div class="modal" style="width:560px">
+    <div class="modal-header">
+      <h3 id="csvModalTitle">导入CSV</h3>
+      <button class="modal-close" onclick="closeModal('csvModal')">&#10005;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--gray-500);margin-bottom:12px" id="csvHelpText"></p>
+      <textarea id="csvInput" rows="10" style="width:100%;padding:10px;border:1px solid var(--gray-300);border-radius:6px;font-size:12px;font-family:monospace" placeholder="在此粘贴CSV内容…"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('csvModal')">取消</button>
+      <button class="btn btn-primary" onclick="doCSVImport()">导入</button>
+    </div>
+  </div>
+</div>
+
+<script>
+var STORAGE_KEY_MATERIALS = 'dental_materials';
+var STORAGE_KEY_USAGES = 'dental_usages';
+var editingMaterialId = null;
+var chartInstances = {};
+var csvImportType = 'material';
+
+function loadData(key) {
+  try { return JSON.parse(localStorage.getItem(key)) || []; }
+  catch(e) { return []; }
+}
+function saveData(key, data) { localStorage.setItem(key, JSON.stringify(data)); }
+
+function genId() { return Date.now().toString(36) + Math.random().toString(36).substr(2, 5); }
+
+function daysBetween(d1, d2) {
+  return Math.ceil((new Date(d2) - new Date(d1)) / 86400000);
+}
+
+function formatDate(d) {
+  if (!d) return '-';
+  var dt = new Date(d);
+  return dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(dt.getDate()).padStart(2,'0');
+}
+
+function today() { return formatDate(new Date()); }
+
+function getWeeklyAvg(materialName) {
+  var usages = loadData(STORAGE_KEY_USAGES).filter(function(u) { return u.materialName === materialName; });
+  if (usages.length === 0) return 0;
+  var now = new Date();
+  var cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 56);
+  var recent = usages.filter(function(u) { return new Date(u.date) >= cutoff; });
+  if (recent.length === 0) return 0;
+  var total = recent.reduce(function(s, u) { return s + (parseFloat(u.quantity) || 0); }, 0);
+  var days = Math.max(1, (now - cutoff) / 86400000);
+  return total / (days / 7);
+}
+
+function getWeeklyAvgByDoctor(materialName) {
+  var usages = loadData(STORAGE_KEY_USAGES).filter(function(u) { return u.materialName === materialName; });
+  var now = new Date();
+  var cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 56);
+  var recent = usages.filter(function(u) { return new Date(u.date) >= cutoff; });
+  var byDoctor = {};
+  recent.forEach(function(u) {
+    if (!byDoctor[u.doctor]) byDoctor[u.doctor] = 0;
+    byDoctor[u.doctor] += (parseFloat(u.quantity) || 0);
+  });
+  var weeks = 8;
+  Object.keys(byDoctor).forEach(function(d) { byDoctor[d] = byDoctor[d] / weeks; });
+  return byDoctor;
+}
+
+function getWeeklyAvgByDept(materialName) {
+  var usages = loadData(STORAGE_KEY_USAGES).filter(function(u) { return u.materialName === materialName; });
+  var now = new Date();
+  var cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 56);
+  var recent = usages.filter(function(u) { return new Date(u.date) >= cutoff; });
+  var byDept = {};
+  recent.forEach(function(u) {
+    if (!byDept[u.department]) byDept[u.department] = 0;
+    byDept[u.department] += (parseFloat(u.quantity) || 0);
+  });
+  var weeks = 8;
+  Object.keys(byDept).forEach(function(d) { byDept[d] = byDept[d] / weeks; });
+  return byDept;
+}
+
+function getWeeklyTrendByDoctor(materialName) {
+  var usages = loadData(STORAGE_KEY_USAGES).filter(function(u) { return u.materialName === materialName; });
+  var now = new Date();
+  var doctors = [];
+  var doctorSet = {};
+  usages.forEach(function(u) { if (!doctorSet[u.doctor]) { doctorSet[u.doctor] = true; doctors.push(u.doctor); } });
+  var weeks = [];
+  for (var i = 7; i >= 0; i--) {
+    var weekEnd = new Date(now); weekEnd.setDate(weekEnd.getDate() - i * 7);
+    var weekStart = new Date(weekEnd); weekStart.setDate(weekStart.getDate() - 7);
+    var label = '第' + (8-i) + '周';
+    var byDoctor = {};
+    doctors.forEach(function(doc) {
+      var weekUsages = usages.filter(function(u) { return u.doctor === doc && new Date(u.date) >= weekStart && new Date(u.date) < weekEnd; });
+      byDoctor[doc] = weekUsages.reduce(function(s, u) { return s + (parseFloat(u.quantity) || 0); }, 0);
+    });
+    weeks.push(Object.assign({ label: label }, byDoctor));
+  }
+  return { weeks: weeks, doctors: doctors };
+}
+
+function assessRisk(material) {
+  var remaining = daysBetween(today(), material.expiryDate);
+  var weeklyAvg = getWeeklyAvg(material.name);
+  var weeksToDeplete = weeklyAvg > 0 ? material.currentStock / weeklyAvg : Infinity;
+  var weeksToExpiry = remaining / 7;
+  var canFinish = weeksToDeplete <= weeksToExpiry;
+  var level, label, suggestion;
+  if (remaining <= 0) {
+    level = 'high'; label = '已过期'; suggestion = '立即下架报废';
+  } else if (remaining <= 30) {
+    level = 'high'; label = '即将过期';
+    suggestion = weeklyAvg === 0 ? '联系供应商换货' : '安排优先使用';
+  } else if (remaining <= 90) {
+    level = canFinish ? 'low' : 'medium';
+    label = canFinish ? '可控' : '积压风险';
+    suggestion = canFinish ? '维持正常使用' : '暂停采购/门店调拨';
+  } else {
+    level = 'low'; label = '安全'; suggestion = '正常管理';
+  }
+  return { remaining: remaining, weeklyAvg: weeklyAvg, weeksToDeplete: weeksToDeplete, weeksToExpiry: weeksToExpiry, canFinish: canFinish, level: level, label: label, suggestion: suggestion };
+}
+
+function switchPage(page) {
+  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
+  document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
+  document.getElementById('page-' + page).classList.add('active');
+  var navItem = document.querySelector('.nav-item[data-page="' + page + '"]');
+  if (navItem) navItem.classList.add('active');
+  var titles = { dashboard: '风险看板', verify: '采购前核验', data: '数据管理', detail: '材料详情' };
+  document.getElementById('pageTitle').textContent = titles[page] || '';
+  if (page === 'dashboard') renderDashboard();
+  if (page === 'verify') renderVerify();
+  if (page === 'data') renderDataPage();
+}
+
+function renderDashboard() {
+  var materials = loadData(STORAGE_KEY_MATERIALS);
+  var riskFilter = document.getElementById('filterRisk').value;
+  var categoryFilter = document.getElementById('filterCategory').value;
+  var searchText = document.getElementById('filterSearch').value.toLowerCase();
+
+  var riskItems = materials.map(function(m) { return Object.assign({}, m, { risk: assessRisk(m) }); });
+  riskItems.sort(function(a, b) { return a.risk.remaining - b.risk.remaining; });
+
+  var threeMonthsLater = new Date(); threeMonthsLater.setMonth(threeMonthsLater.getMonth() + 3);
+  riskItems = riskItems.filter(function(m) {
+    return new Date(m.expiryDate) <= threeMonthsLater || m.risk.level === 'high';
+  });
+
+  if (riskFilter !== 'all') riskItems = riskItems.filter(function(m) { return m.risk.level === riskFilter; });
+  if (categoryFilter !== 'all') riskItems = riskItems.filter(function(m) { return m.category === categoryFilter; });
+  if (searchText) riskItems = riskItems.filter(function(m) { return m.name.toLowerCase().indexOf(searchText) >= 0; });
+
+  var high = riskItems.filter(function(m) { return m.risk.level === 'high'; }).length;
+  var medium = riskItems.filter(function(m) { return m.risk.level === 'medium'; }).length;
+  var low = riskItems.filter(function(m) { return m.risk.level === 'low'; }).length;
+  var totalAtRisk = riskItems.reduce(function(s, m) { return s + (m.currentStock * (m.price || 0)); }, 0);
+
+  document.getElementById('statsRow').innerHTML =
+    '<div class="stat-card danger"><div class="label">高风险材料</div><div class="value">' + high + '</div><div class="sub">30天内到期或已过期</div></div>' +
+    '<div class="stat-card warning"><div class="label">中风险材料</div><div class="value">' + medium + '</div><div class="sub">积压风险，预计用不完</div></div>' +
+    '<div class="stat-card success"><div class="label">低风险/可控</div><div class="value">' + low + '</div><div class="sub">预计可在效期内用完</div></div>' +
+    '<div class="stat-card"><div class="label">涉险金额</div><div class="value">&yen;' + totalAtRisk.toFixed(0) + '</div><div class="sub">近3月到期材料库存价值</div></div>';
+
+  var tbody = document.getElementById('riskTableBody');
+  if (riskItems.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:40px;color:var(--gray-400)">暂无风险材料数据，请先添加材料库存</td></tr>';
+    return;
+  }
+  tbody.innerHTML = riskItems.map(function(m) {
+    var r = m.risk;
+    var badgeClass = { high: 'badge-danger', medium: 'badge-warning', low: 'badge-success' }[r.level];
+    var barPct = Math.min(100, r.weeksToExpiry > 0 ? (r.weeksToDeplete / r.weeksToExpiry) * 100 : 100);
+    var barColor = r.canFinish ? 'var(--success)' : 'var(--danger)';
+    var finishLabel = r.weeklyAvg === 0 ? '无消耗数据' : (r.canFinish ? '✅ 能用完' : '❌ 用不完');
+    var remainingColor = r.remaining <= 30 ? 'var(--danger)' : (r.remaining <= 90 ? 'var(--warning)' : 'var(--gray-600)');
+    return '<tr>' +
+      '<td><span class="badge ' + badgeClass + '">' + r.label + '</span></td>' +
+      '<td><a class="material-link" onclick="showDetail(\'' + m.id + '\')">' + m.name + '</a></td>' +
+      '<td>' + m.category + '</td>' +
+      '<td>' + m.currentStock + ' ' + m.unit + '</td>' +
+      '<td>' + m.batchNo + '</td>' +
+      '<td>' + formatDate(m.expiryDate) + '</td>' +
+      '<td style="font-weight:600;color:' + remainingColor + '">' + r.remaining + '天</td>' +
+      '<td>' + (r.weeklyAvg > 0 ? r.weeklyAvg.toFixed(1) : '-') + '</td>' +
+      '<td><div class="risk-bar"><div class="risk-bar-fill" style="width:' + Math.min(barPct, 100) + '%;background:' + barColor + '"></div></div> ' + (r.weeksToDeplete !== Infinity ? r.weeksToDeplete.toFixed(1) + '周' : '∞') + '</td>' +
+      '<td style="font-weight:600">' + finishLabel + '</td>' +
+      '<td style="font-size:12px;color:var(--gray-600)">' + r.suggestion + '</td>' +
+      '<td><button class="btn btn-outline btn-sm" onclick="showDetail(\'' + m.id + '\')">详情</button></td>' +
+    '</tr>';
+  }).join('');
+}
+
+function renderCategoryFilter() {
+  var materials = loadData(STORAGE_KEY_MATERIALS);
+  var categorySet = {};
+  var categories = [];
+  materials.forEach(function(m) { if (!categorySet[m.category]) { categorySet[m.category] = true; categories.push(m.category); } });
+  var sel = document.getElementById('filterCategory');
+  sel.innerHTML = '<option value="all">全部分类</option>' + categories.map(function(c) { return '<option value="' + c + '">' + c + '</option>'; }).join('');
+}
+
+function showDetail(id) {
+  var materials = loadData(STORAGE_KEY_MATERIALS);
+  var m = materials.find(function(x) { return x.id === id; });
+  if (!m) return;
+  var r = assessRisk(m);
+
+  document.getElementById('detailModalTitle').textContent = m.name + ' — 详细分析';
+  var usages = loadData(STORAGE_KEY_USAGES).filter(function(u) { return u.materialName === m.name; });
+  var byDoctor = getWeeklyAvgByDoctor(m.name);
+  var byDept = getWeeklyAvgByDept(m.name);
+  var trend = getWeeklyTrendByDoctor(m.name);
+
+  var suggestions = [];
+  if (r.remaining <= 0) {
+    suggestions.push({ icon: '🚫', title: '立即下架', desc: '该材料已过期，需立即停止使用并报废处理', color: 'var(--danger)' });
+  }
+  if (r.remaining > 0 && r.remaining <= 30 && r.weeklyAvg === 0) {
+    suggestions.push({ icon: '🔄', title: '联系供应商换货', desc: '近8周无消耗记录且即将过期，建议联系供应商协商换货', color: 'var(--warning)' });
+  }
+  if (!r.canFinish && r.weeklyAvg > 0) {
+    suggestions.push({ icon: '⏸️', title: '暂停采购', desc: '按当前消耗速度(' + r.weeklyAvg.toFixed(1) + '/周)，库存无法在效期内用完', color: 'var(--warning)' });
+    suggestions.push({ icon: '🔁', title: '门店调拨', desc: '可考虑将多余库存调拨至消耗量更大的门店或科室', color: 'var(--primary)' });
+  }
+  if (!r.canFinish && r.weeklyAvg > 0 && r.remaining <= 60) {
+    suggestions.push({ icon: '⚡', title: '安排优先使用', desc: '在临床中优先使用此批次材料，减少报废风险', color: 'var(--warning)' });
+  }
+  if (r.canFinish && r.level === 'low') {
+    suggestions.push({ icon: '✅', title: '维持正常使用', desc: '按当前消耗速度，可在效期内用完，无需额外操作', color: 'var(--success)' });
+  }
+  if (usages.length === 0) {
+    suggestions.push({ icon: '📝', title: '补充领用数据', desc: '暂无领用记录，建议录入近期领用数据以获得更准确的分析', color: 'var(--gray-500)' });
+  }
+
+  var remainingColor = r.remaining <= 30 ? 'var(--danger)' : (r.remaining <= 90 ? 'var(--warning)' : 'var(--success)');
+
+  var html =
+    '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:20px">' +
+      '<div style="background:var(--gray-50);padding:12px;border-radius:8px;text-align:center">' +
+        '<div style="font-size:12px;color:var(--gray-500)">当前库存</div>' +
+        '<div style="font-size:20px;font-weight:700">' + m.currentStock + ' ' + m.unit + '</div>' +
+      '</div>' +
+      '<div style="background:var(--gray-50);padding:12px;border-radius:8px;text-align:center">' +
+        '<div style="font-size:12px;color:var(--gray-500)">到期日期</div>' +
+        '<div style="font-size:20px;font-weight:700;color:' + (r.remaining<=30?'var(--danger)':'var(--gray-800)') + '">' + formatDate(m.expiryDate) + '</div>' +
+      '</div>' +
+      '<div style="background:var(--gray-50);padding:12px;border-radius:8px;text-align:center">' +
+        '<div style="font-size:12px;color:var(--gray-500)">剩余天数</div>' +
+        '<div style="font-size:20px;font-weight:700;color:' + remainingColor + '">' + r.remaining + '天</div>' +
+      '</div>' +
+      '<div style="background:var(--gray-50);padding:12px;border-radius:8px;text-align:center">' +
+        '<div style="font-size:12px;color:var(--gray-500)">周均消耗</div>' +
+        '<div style="font-size:20px;font-weight:700">' + (r.weeklyAvg > 0 ? r.weeklyAvg.toFixed(1) : '-') + '</div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="charts-row">' +
+      '<div class="chart-box"><h4>各医生近8周使用趋势</h4><canvas id="detailDoctorChart" height="220"></canvas></div>' +
+      '<div class="chart-box"><h4>各科室消耗占比</h4><canvas id="detailDeptChart" height="220"></canvas></div>' +
+    '</div>' +
+    '<div style="margin-bottom:16px">' +
+      '<h4 style="font-size:14px;font-weight:600;margin-bottom:10px">建议动作</h4>' +
+      '<div class="action-cards">' +
+        suggestions.map(function(s) {
+          return '<div class="action-card">' +
+            '<div class="action-icon" style="background:' + s.color + '20;color:' + s.color + '">' + s.icon + '</div>' +
+            '<div class="action-title">' + s.title + '</div>' +
+            '<div class="action-desc">' + s.desc + '</div>' +
+          '</div>';
+        }).join('') +
+      '</div>' +
+    '</div>' +
+    '<div>' +
+      '<h4 style="font-size:14px;font-weight:600;margin-bottom:10px">近期领用记录</h4>' +
+      (usages.length === 0 ? '<p style="color:var(--gray-400);font-size:13px">暂无领用记录</p>' :
+        '<div class="usage-table"><table><thead><tr><th>日期</th><th>数量</th><th>医生</th><th>科室</th><th>治疗项目</th></tr></thead><tbody>' +
+        usages.sort(function(a,b){return new Date(b.date)-new Date(a.date)}).slice(0,20).map(function(u) {
+          return '<tr><td>' + formatDate(u.date) + '</td><td>' + u.quantity + '</td><td>' + u.doctor + '</td><td>' + u.department + '</td><td>' + u.treatment + '</td></tr>';
+        }).join('') +
+        '</tbody></table></div>'
+      ) +
+    '</div>';
+
+  document.getElementById('detailModalBody').innerHTML = html;
+  openModal('detailModal');
+
+  setTimeout(function() {
+    if (chartInstances.detailDoctor) chartInstances.detailDoctor.destroy();
+    if (chartInstances.detailDept) chartInstances.detailDept.destroy();
+
+    var colors = ['#2563eb','#f59e0b','#10b981','#ef4444','#8b5cf6','#ec4899'];
+    var doctorDatasets = trend.doctors.map(function(doc, i) {
+      return {
+        label: doc,
+        data: trend.weeks.map(function(w) { return w[doc] || 0; }),
+        borderColor: colors[i % colors.length],
+        backgroundColor: colors[i % colors.length] + '20',
+        fill: false,
+        tension: 0.3,
+        borderWidth: 2,
+        pointRadius: 3
+      };
+    });
+
+    chartInstances.detailDoctor = new Chart(document.getElementById('detailDoctorChart'), {
+      type: 'line',
+      data: { labels: trend.weeks.map(function(w) { return w.label; }), datasets: doctorDatasets },
+      options: {
+        responsive: true,
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } } },
+        scales: { y: { beginAtZero: true, title: { display: true, text: '数量', font: { size: 11 } } } }
+      }
+    });
+
+    var deptLabels = Object.keys(byDept);
+    var deptData = Object.values(byDept);
+    chartInstances.detailDept = new Chart(document.getElementById('detailDeptChart'), {
+      type: 'doughnut',
+      data: {
+        labels: deptLabels,
+        datasets: [{ data: deptData, backgroundColor: colors.slice(0, deptLabels.length) }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } } }
+      }
+    });
+  }, 100);
+}
+
+function renderVerify() {
+  var materials = loadData(STORAGE_KEY_MATERIALS);
+  var sel = document.getElementById('verifyMaterial');
+  sel.innerHTML = '<option value="">请选择…</option>' + materials.map(function(m) {
+    return '<option value="' + m.id + '">' + m.name + ' (' + m.batchNo + ')</option>';
+  }).join('');
+
+  var tbody = document.getElementById('verifyStockBody');
+  tbody.innerHTML = materials.map(function(m) {
+    var avg = getWeeklyAvg(m.name);
+    var remaining = daysBetween(today(), m.expiryDate);
+    var weeksToDeplete = avg > 0 ? (m.currentStock / avg).toFixed(1) : '∞';
+    var remainingColor = remaining <= 30 ? 'var(--danger)' : (remaining <= 90 ? 'var(--warning)' : 'inherit');
+    return '<tr>' +
+      '<td>' + m.name + '</td><td>' + m.batchNo + '</td><td>' + m.currentStock + ' ' + m.unit + '</td>' +
+      '<td>' + formatDate(m.expiryDate) + '</td>' +
+      '<td style="color:' + remainingColor + '">' + remaining + '天</td>' +
+      '<td>' + (avg > 0 ? avg.toFixed(1) : '-') + '</td>' +
+      '<td>' + weeksToDeplete + '</td>' +
+    '</tr>';
+  }).join('');
+
+  document.getElementById('verifyResult').innerHTML = '';
+}
+
+function onVerifyMaterialChange() {
+  var id = document.getElementById('verifyMaterial').value;
+  if (!id) { document.getElementById('verifyWeeklyUsage').value = ''; runVerify(); return; }
+  var materials = loadData(STORAGE_KEY_MATERIALS);
+  var m = materials.find(function(x) { return x.id === id; });
+  if (m) {
+    var avg = getWeeklyAvg(m.name);
+    document.getElementById('verifyWeeklyUsage').value = avg > 0 ? avg.toFixed(1) : '';
+  }
+  runVerify();
+}
+
+function runVerify() {
+  var id = document.getElementById('verifyMaterial').value;
+  var qty = parseFloat(document.getElementById('verifyQty').value) || 0;
+  var expiry = document.getElementById('verifyExpiry').value;
+  var weeklyUsage = parseFloat(document.getElementById('verifyWeeklyUsage').value) || 0;
+
+  if (!id || qty <= 0) {
+    document.getElementById('verifyResult').innerHTML = '';
+    return;
+  }
+
+  var materials = loadData(STORAGE_KEY_MATERIALS);
+  var m = materials.find(function(x) { return x.id === id; });
+  if (!m) return;
+
+  var sameNameMaterials = materials.filter(function(x) { return x.name === m.name && x.id !== m.id; });
+  var totalExistingStock = sameNameMaterials.reduce(function(s, x) { return s + x.currentStock; }, 0) + m.currentStock;
+  var totalAfterPurchase = totalExistingStock + qty;
+
+  var existingExpiry = m.expiryDate;
+  var newExpiry = expiry || existingExpiry;
+
+  var daysToExistingExpiry = daysBetween(today(), existingExpiry);
+  var daysToNewExpiry = daysBetween(today(), newExpiry);
+
+  var html = '';
+
+  if (weeklyUsage <= 0) {
+    html = '<div class="verify-result warn">' +
+      '<h4>⚠️ 缺少消耗数据</h4>' +
+      '<div class="detail">' +
+        '当前材料「' + m.name + '」无近8周消耗数据，无法判断采购合理性。<br>' +
+        '现有库存合计 <strong>' + totalExistingStock + ' ' + m.unit + '</strong>，采购后合计 <strong>' + totalAfterPurchase + ' ' + m.unit + '</strong>。<br>' +
+        '建议先补充领用数据或谨慎采购。' +
+      '</div>' +
+    '</div>';
+  } else {
+    var weeksToDepleteExisting = totalExistingStock / weeklyUsage;
+    var daysToDepleteExisting = weeksToDepleteExisting * 7;
+    var weeksToDepleteAfter = totalAfterPurchase / weeklyUsage;
+    var daysToDepleteAfter = weeksToDepleteAfter * 7;
+
+    var canFinishAfter = daysToDepleteAfter <= daysToNewExpiry;
+
+    var overlapWarning = '';
+    sameNameMaterials.forEach(function(sm) {
+      var smDays = daysBetween(today(), sm.expiryDate);
+      if (daysToNewExpiry > smDays && sm.currentStock > 0) {
+        overlapWarning += '<br>⚠️ 与批次「' + sm.batchNo + '」(到期' + formatDate(sm.expiryDate) + ', 库存' + sm.currentStock + sm.unit + ')存在新旧批次重叠';
+      }
+    });
+
+    if (canFinishAfter) {
+      html = '<div class="verify-result pass">' +
+        '<h4>✅ 采购可行</h4>' +
+        '<div class="detail">' +
+          '拟采购 <strong>' + qty + ' ' + m.unit + '</strong>，采购后合计库存 <strong>' + totalAfterPurchase + ' ' + m.unit + '</strong>。<br>' +
+          '按周均消耗 <strong>' + weeklyUsage.toFixed(1) + ' ' + m.unit + '/周</strong>，预计 <strong>' + weeksToDepleteAfter.toFixed(1) + ' 周</strong>用完。<br>' +
+          '新批次到期日 <strong>' + formatDate(newExpiry) + '</strong>（' + daysToNewExpiry + '天后），预计能在效期内用完。' + overlapWarning +
+        '</div>' +
+      '</div>';
+    } else {
+      var excessWeeks = weeksToDepleteAfter - (daysToNewExpiry / 7);
+      var excessQty = Math.ceil(excessWeeks * weeklyUsage);
+      var suggestedQty = Math.max(0, Math.floor((daysToNewExpiry / 7) * weeklyUsage - totalExistingStock));
+      html = '<div class="verify-result block">' +
+        '<h4>🚫 积压风险 — 不建议按此数量采购</h4>' +
+        '<div class="detail">' +
+          '拟采购 <strong>' + qty + ' ' + m.unit + '</strong>，采购后合计库存 <strong>' + totalAfterPurchase + ' ' + m.unit + '</strong>。<br>' +
+          '按周均消耗 <strong>' + weeklyUsage.toFixed(1) + ' ' + m.unit + '/周</strong>，需 <strong>' + weeksToDepleteAfter.toFixed(1) + ' 周</strong>才能用完。<br>' +
+          '但新批次到期日为 <strong>' + formatDate(newExpiry) + '</strong>（仅' + daysToNewExpiry + '天 ≈ ' + (daysToNewExpiry/7).toFixed(1) + '周），<br>' +
+          '预计超量 <strong>约' + excessQty + ' ' + m.unit + '</strong>（' + excessWeeks.toFixed(1) + '周用量）可能过期报废。<br><br>' +
+          '💡 建议采购数量：<strong>' + suggestedQty + ' ' + m.unit + '</strong>' + overlapWarning +
+        '</div>' +
+      '</div>';
+    }
+  }
+
+  document.getElementById('verifyResult').innerHTML = html;
+}
+
+function renderDataPage() {
+  var materials = loadData(STORAGE_KEY_MATERIALS);
+  var usages = loadData(STORAGE_KEY_USAGES);
+
+  document.getElementById('materialTableBody').innerHTML = materials.length === 0
+    ? '<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--gray-400)">暂无材料数据</td></tr>'
+    : materials.map(function(m) {
+      return '<tr>' +
+        '<td>' + m.name + '</td><td>' + m.category + '</td><td>' + m.batchNo + '</td>' +
+        '<td>' + m.currentStock + ' ' + m.unit + '</td><td>' + m.unit + '</td>' +
+        '<td>' + formatDate(m.expiryDate) + '</td><td>&yen;' + (m.price||0).toFixed(2) + '</td>' +
+        '<td>' +
+          '<button class="btn btn-outline btn-sm" onclick="editMaterial(\'' + m.id + '\')">编辑</button> ' +
+          '<button class="btn btn-danger btn-sm" onclick="deleteMaterial(\'' + m.id + '\')">删除</button>' +
+        '</td>' +
+      '</tr>';
+    }).join('');
+
+  document.getElementById('usageTableBody').innerHTML = usages.length === 0
+    ? '<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--gray-400)">暂无领用记录</td></tr>'
+    : usages.sort(function(a,b){return new Date(b.date)-new Date(a.date)}).map(function(u) {
+      return '<tr>' +
+        '<td>' + formatDate(u.date) + '</td><td>' + u.materialName + '</td><td>' + u.quantity + '</td>' +
+        '<td>' + u.doctor + '</td><td>' + u.department + '</td><td>' + u.treatment + '</td>' +
+        '<td><button class="btn btn-danger btn-sm" onclick="deleteUsage(\'' + u.id + '\')">删除</button></td>' +
+      '</tr>';
+    }).join('');
+}
+
+function openModal(id) { document.getElementById(id).classList.add('show'); }
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+function openAddMaterial() {
+  editingMaterialId = null;
+  document.getElementById('materialModalTitle').textContent = '添加材料';
+  document.getElementById('matName').value = '';
+  document.getElementById('matCategory').value = '充填材料';
+  document.getElementById('matBatch').value = '';
+  document.getElementById('matStock').value = '';
+  document.getElementById('matUnit').value = '支';
+  document.getElementById('matExpiry').value = '';
+  document.getElementById('matPrice').value = '';
+  openModal('materialModal');
+}
+
+function editMaterial(id) {
+  var materials = loadData(STORAGE_KEY_MATERIALS);
+  var m = materials.find(function(x) { return x.id === id; });
+  if (!m) return;
+  editingMaterialId = id;
+  document.getElementById('materialModalTitle').textContent = '编辑材料';
+  document.getElementById('matName').value = m.name;
+  document.getElementById('matCategory').value = m.category;
+  document.getElementById('matBatch').value = m.batchNo;
+  document.getElementById('matStock').value = m.currentStock;
+  document.getElementById('matUnit').value = m.unit;
+  document.getElementById('matExpiry').value = m.expiryDate;
+  document.getElementById('matPrice').value = m.price || '';
+  openModal('materialModal');
+}
+
+function saveMaterial() {
+  var name = document.getElementById('matName').value.trim();
+  var category = document.getElementById('matCategory').value;
+  var batchNo = document.getElementById('matBatch').value.trim();
+  var stock = parseFloat(document.getElementById('matStock').value) || 0;
+  var unit = document.getElementById('matUnit').value;
+  var expiryDate = document.getElementById('matExpiry').value;
+  var price = parseFloat(document.getElementById('matPrice').value) || 0;
+
+  if (!name || !batchNo || !expiryDate) { showToast('请填写必填项', 'error'); return; }
+
+  var materials = loadData(STORAGE_KEY_MATERIALS);
+  if (editingMaterialId) {
+    var idx = materials.findIndex(function(m) { return m.id === editingMaterialId; });
+    if (idx >= 0) {
+      var oldName = materials[idx].name;
+      materials[idx] = Object.assign({}, materials[idx], { name: name, category: category, batchNo: batchNo, currentStock: stock, unit: unit, expiryDate: expiryDate, price: price });
+      if (oldName !== name) {
+        var usages = loadData(STORAGE_KEY_USAGES);
+        usages.filter(function(u) { return u.materialName === oldName; }).forEach(function(u) { u.materialName = name; });
+        saveData(STORAGE_KEY_USAGES, usages);
+      }
+    }
+  } else {
+    materials.push({ id: genId(), name: name, category: category, batchNo: batchNo, currentStock: stock, unit: unit, expiryDate: expiryDate, price: price });
+  }
+
+  saveData(STORAGE_KEY_MATERIALS, materials);
+  closeModal('materialModal');
+  showToast(editingMaterialId ? '材料已更新' : '材料已添加', 'success');
+  refreshAll();
+}
+
+function deleteMaterial(id) {
+  if (!confirm('确定删除该材料？')) return;
+  var materials = loadData(STORAGE_KEY_MATERIALS).filter(function(m) { return m.id !== id; });
+  saveData(STORAGE_KEY_MATERIALS, materials);
+  refreshAll();
+}
+
+function openAddUsage() {
+  var materials = loadData(STORAGE_KEY_MATERIALS);
+  document.getElementById('usageDate').value = today();
+  document.getElementById('usageMaterial').innerHTML = materials.map(function(m) {
+    return '<option value="' + m.name + '">' + m.name + ' (' + m.batchNo + ')</option>';
+  }).join('');
+  document.getElementById('usageQty').value = '';
+  document.getElementById('usageDoctor').value = '张伟明';
+  document.getElementById('usageDept').value = '全科';
+  document.getElementById('usageTreatment').value = '窝沟封闭';
+  openModal('usageModal');
+}
+
+function saveUsage() {
+  var date = document.getElementById('usageDate').value;
+  var materialName = document.getElementById('usageMaterial').value;
+  var quantity = parseFloat(document.getElementById('usageQty').value) || 0;
+  var doctor = document.getElementById('usageDoctor').value;
+  var department = document.getElementById('usageDept').value;
+  var treatment = document.getElementById('usageTreatment').value;
+
+  if (!date || !materialName || quantity <= 0) { showToast('请填写必填项', 'error'); return; }
+
+  var usages = loadData(STORAGE_KEY_USAGES);
+  usages.push({ id: genId(), date: date, materialName: materialName, quantity: quantity, doctor: doctor, department: department, treatment: treatment });
+  saveData(STORAGE_KEY_USAGES, usages);
+
+  var materials = loadData(STORAGE_KEY_MATERIALS);
+  var m = materials.find(function(x) { return x.name === materialName; });
+  if (m) {
+    m.currentStock = Math.max(0, m.currentStock - quantity);
+    saveData(STORAGE_KEY_MATERIALS, materials);
+  }
+
+  closeModal('usageModal');
+  showToast('领用记录已添加', 'success');
+  refreshAll();
+}
+
+function deleteUsage(id) {
+  if (!confirm('确定删除该领用记录？')) return;
+  var usages = loadData(STORAGE_KEY_USAGES).filter(function(u) { return u.id !== id; });
+  saveData(STORAGE_KEY_USAGES, usages);
+  refreshAll();
+}
+
+function importCSV() {
+  csvImportType = 'material';
+  document.getElementById('csvModalTitle').textContent = '导入材料库存CSV';
+  document.getElementById('csvHelpText').textContent = 'CSV格式：材料名称,分类,批次号,当前库存,单位,到期日期,单价\n示例：窝沟封闭剂,预防保健材料,BN20250601,25,支,2026-03-15,68.50';
+  document.getElementById('csvInput').value = '';
+  openModal('csvModal');
+}
+
+function importUsageCSV() {
+  csvImportType = 'usage';
+  document.getElementById('csvModalTitle').textContent = '导入领用记录CSV';
+  document.getElementById('csvHelpText').textContent = 'CSV格式：日期,材料名称,数量,医生,科室,治疗项目\n示例：2026-06-10,窝沟封闭剂,3,张伟明,儿童口腔科,窝沟封闭';
+  document.getElementById('csvInput').value = '';
+  openModal('csvModal');
+}
+
+function doCSVImport() {
+  var raw = document.getElementById('csvInput').value.trim();
+  if (!raw) { showToast('请粘贴CSV内容', 'error'); return; }
+
+  var lines = raw.split('\n').map(function(l) { return l.trim(); }).filter(function(l) {
+    return l && l.indexOf('材料名称') !== 0 && l.indexOf('日期') !== 0;
+  });
+
+  if (csvImportType === 'material') {
+    var materials = loadData(STORAGE_KEY_MATERIALS);
+    var count = 0;
+    lines.forEach(function(line) {
+      var parts = line.split(',').map(function(s) { return s.trim(); });
+      if (parts.length >= 6) {
+        materials.push({
+          id: genId(),
+          name: parts[0],
+          category: parts[1],
+          batchNo: parts[2],
+          currentStock: parseFloat(parts[3]) || 0,
+          unit: parts[4] || '支',
+          expiryDate: parts[5],
+          price: parseFloat(parts[6]) || 0
+        });
+        count++;
+      }
+    });
+    saveData(STORAGE_KEY_MATERIALS, materials);
+    showToast('成功导入 ' + count + ' 条材料记录', 'success');
+  } else {
+    var usages = loadData(STORAGE_KEY_USAGES);
+    var count2 = 0;
+    lines.forEach(function(line) {
+      var parts = line.split(',').map(function(s) { return s.trim(); });
+      if (parts.length >= 6) {
+        usages.push({
+          id: genId(),
+          date: parts[0],
+          materialName: parts[1],
+          quantity: parseFloat(parts[2]) || 0,
+          doctor: parts[3],
+          department: parts[4],
+          treatment: parts[5]
+        });
+        count2++;
+      }
+    });
+    saveData(STORAGE_KEY_USAGES, usages);
+    showToast('成功导入 ' + count2 + ' 条领用记录', 'success');
+  }
+
+  closeModal('csvModal');
+  refreshAll();
+}
+
+function exportData() {
+  var materials = loadData(STORAGE_KEY_MATERIALS);
+  var usages = loadData(STORAGE_KEY_USAGES);
+  var data = { materials: materials, usages: usages, exportDate: today() };
+  var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = '齿科智采_数据导出_' + today() + '.json';
+  a.click();
+  showToast('数据已导出', 'success');
+}
+
+function showToast(msg, type) {
+  var existing = document.querySelector('.toast');
+  if (existing) existing.remove();
+  var div = document.createElement('div');
+  div.className = 'toast ' + type;
+  div.textContent = msg;
+  document.body.appendChild(div);
+  setTimeout(function() { div.remove(); }, 3000);
+}
+
+function refreshAll() {
+  renderCategoryFilter();
+  var activePage = document.querySelector('.page.active');
+  if (activePage) {
+    if (activePage.id === 'page-dashboard') renderDashboard();
+    else if (activePage.id === 'page-verify') renderVerify();
+    else if (activePage.id === 'page-data') renderDataPage();
+  }
+}
+
+function initSampleData() {
+  if (loadData(STORAGE_KEY_MATERIALS).length > 0) return;
+
+  var now = new Date();
+  var materials = [
+    { id: genId(), name: '窝沟封闭剂', category: '预防保健材料', batchNo: 'BN20250601', currentStock: 45, unit: '支', expiryDate: formatDate(new Date(now.getTime() + 25*86400000)), price: 68.50 },
+    { id: genId(), name: '印模硅橡胶', category: '印模材料', batchNo: 'YM20250401', currentStock: 30, unit: '套', expiryDate: formatDate(new Date(now.getTime() + 55*86400000)), price: 125.00 },
+    { id: genId(), name: '光固化树脂(A2)', category: '充填材料', batchNo: 'SG20250701', currentStock: 18, unit: '支', expiryDate: formatDate(new Date(now.getTime() + 120*86400000)), price: 89.00 },
+    { id: genId(), name: '根管封闭剂', category: '根管治疗材料', batchNo: 'GG20250301', currentStock: 22, unit: '支', expiryDate: formatDate(new Date(now.getTime() + 15*86400000)), price: 56.00 },
+    { id: genId(), name: '玻璃离子水门汀', category: '粘接材料', batchNo: 'BL20250801', currentStock: 12, unit: '瓶', expiryDate: formatDate(new Date(now.getTime() + 180*86400000)), price: 72.00 },
+    { id: genId(), name: '藻酸盐印模材', category: '印模材料', batchNo: 'ZS20250501', currentStock: 40, unit: '包', expiryDate: formatDate(new Date(now.getTime() + 40*86400000)), price: 28.00 },
+    { id: genId(), name: '托盘粘接剂', category: '粘接材料', batchNo: 'TP20250901', currentStock: 8, unit: '瓶', expiryDate: formatDate(new Date(now.getTime() + 200*86400000)), price: 95.00 },
+    { id: genId(), name: '牙胶尖', category: '根管治疗材料', batchNo: 'YJ20250601', currentStock: 60, unit: '盒', expiryDate: formatDate(new Date(now.getTime() + 75*86400000)), price: 35.00 },
+    { id: genId(), name: '自酸蚀粘接剂', category: '粘接材料', batchNo: 'ZS20250401', currentStock: 15, unit: '瓶', expiryDate: formatDate(new Date(now.getTime() + 65*86400000)), price: 108.00 },
+    { id: genId(), name: '排龈线', category: '修复材料', batchNo: 'PY20251001', currentStock: 35, unit: '盒', expiryDate: formatDate(new Date(now.getTime() + 250*86400000)), price: 42.00 },
+    { id: genId(), name: '一次性口腔检查盘', category: '其他', batchNo: 'KC20250601', currentStock: 200, unit: '个', expiryDate: formatDate(new Date(now.getTime() + 300*86400000)), price: 3.50 }
+  ];
+  saveData(STORAGE_KEY_MATERIALS, materials);
+
+  var doctors = ['张伟明','李芳','王建国','陈静','刘洋'];
+  var depts = ['全科','正畸科','修复科','儿童口腔科','牙周科','外科'];
+  var treatments = ['窝沟封闭','树脂充填','根管治疗','固定修复','活动修复','正畸粘接','拔牙','洁治','种植','其他'];
+  var matNames = ['窝沟封闭剂','印模硅橡胶','光固化树脂(A2)','根管封闭剂','藻酸盐印模材','牙胶尖','自酸蚀粘接剂'];
+
+  var usages = [];
+  for (var d = 55; d >= 0; d--) {
+    var numEntries = Math.floor(Math.random() * 3) + 1;
+    for (var e = 0; e < numEntries; e++) {
+      var matName = matNames[Math.floor(Math.random() * matNames.length)];
+      var doctor = doctors[Math.floor(Math.random() * doctors.length)];
+      var dept = depts[Math.floor(Math.random() * depts.length)];
+      var treatment = treatments[Math.floor(Math.random() * treatments.length)];
+      var qty = Math.floor(Math.random() * 5) + 1;
+      var dateObj = new Date(now.getTime() - d * 86400000);
+      usages.push({
+        id: genId(),
+        date: formatDate(dateObj),
+        materialName: matName,
+        quantity: qty,
+        doctor: doctor,
+        department: dept,
+        treatment: treatment
+      });
+    }
+  }
+  saveData(STORAGE_KEY_USAGES, usages);
+}
+
+initSampleData();
+renderCategoryFilter();
+renderDashboard();
+</script>
+</body>
+</html>
